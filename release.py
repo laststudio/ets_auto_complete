@@ -105,6 +105,17 @@ def _login(config, phone: str, password: str) -> dict:
     finally:
         client.close()
 
+def _homework_bucket(item) -> str:
+    """ETS 真实 item.status: 0=未完成 1=已完成 2=已过期 4=待重交 5=历史。
+    归并：待完成(0,4) / 已完成(1,5) / 已过期(2)。"""
+    status = str(item.get("status", "0"))
+    if status in ("0", "4"):
+        return "0"
+    if status in ("1", "5"):
+        return "1"
+    return "2"
+
+
 def _pick_homework(client, parent_id: str) -> list[dict]:
     from ets_demo.ets import EtsError, classify_homework
 
@@ -116,54 +127,110 @@ def _pick_homework(client, parent_id: str) -> list[dict]:
             print("提示：该账号未加入任何班级，或需要先在 ETS 官方客户端绑定班级。")
             return []
         raise
-    pending = [item for item in items if str(item.get("status", "0")) == "0"]
-    if not pending:
-        print("没有待完成（status=0）的作业。")
-        return []
-    print()
-    print("待完成作业：")
-    for index, item in enumerate(pending):
-        name = item.get("name", "")
-        hid = item.get("id", "")
-        kind = classify_homework(item)
-        print(f"  {index + 1}. {name}  id={hid}  类型={kind}")
-    print()
-    choice = input("请选择要自动完成的作业序号（多个用逗号分隔，0=全部，回车=退出）: ").strip()
-    if not choice:
-        return []
-    try:
-        if choice == "0":
-            return pending
-        indices = [int(part) - 1 for part in choice.replace("，", ",").split(",") if part.strip()]
-        return [pending[i] for i in indices]
-    except (ValueError, IndexError):
-        print(f"无效序号: {choice}")
+    if not items:
+        print("没有获取到任何作业。")
         return []
 
+    categories = [
+        ("0", "待完成"),
+        ("1", "已完成"),
+        ("2", "已过期"),
+    ]
+    labels = {key: label for key, label in categories}
+    grouped = {key: [item for item in items if _homework_bucket(item) == key] for key, _ in categories}
 
-def _do_homework(config, item: dict) -> None:
+    while True:
+        print()
+        print("请选择作业分类：")
+        for index, (key, label) in enumerate(categories):
+            count = len(grouped[key])
+            print(f"  {index + 1}. {label}（{count} 份）")
+        print("  回车=退出")
+        category_choice = input("分类序号: ").strip()
+        if not category_choice:
+            return []
+        try:
+            key = categories[int(category_choice) - 1][0]
+        except (ValueError, IndexError):
+            print(f"无效分类: {category_choice}")
+            continue
+
+        bucket = grouped[key]
+        if not bucket:
+            print(f"没有{labels[key]}的作业。")
+            continue
+        print()
+        print(f"{labels[key]}作业：")
+        for index, item in enumerate(bucket):
+            name = item.get("name", "")
+            hid = item.get("id", "")
+            kind = classify_homework(item)
+            print(f"  {index + 1}. {name}  id={hid}  类型={kind}")
+        print()
+        choice = input("请选择要处理的作业序号（多个用逗号分隔，0=全部，回车=返回分类菜单）: ").strip()
+        if not choice:
+            continue
+        try:
+            if choice == "0":
+                return bucket
+            indices = [int(part) - 1 for part in choice.replace("，", ",").split(",") if part.strip()]
+            return [bucket[i] for i in indices]
+        except (ValueError, IndexError):
+            print(f"无效序号: {choice}")
+
+
+def _voice_choice(config) -> tuple[str, str | None]:
+    """根据本地配置决定 voice_mode 和 clone_reference。
+    返回 (voice_mode, clone_reference)。"""
+    from ets_demo.config import _env
+
+    mode = _env("ETS_VOICE_MODE", "edge").strip().lower()
+    reference = _env("ETS_CLONE_REFERENCE", "").strip()
+    if mode not in ("edge", "clone", "http"):
+        mode = "edge"
+    if mode == "clone":
+        try:
+            from ets_demo.config import CloneTtsConfig
+
+            CloneTtsConfig.from_env().validate()
+        except Exception as exc:
+            print(f"克隆 TTS 未配置：{exc}")
+            print("提示：在 ~/.ets_demo/config.local.json 中配置 CLONE_TTS_URL / CLONE_TTS_RESULTS_URL / CLONE_TTS_API_KEY，")
+            print("      并用 ETS_CLONE_REFERENCE 指定参考音频路径后重试。")
+            print("回退到 edge 语音。")
+            return "edge", None
+        if not reference:
+            print("克隆模式需要参考音频：在 config.local.json 中设置 ETS_CLONE_REFERENCE=/path/to/reference.wav")
+            print("回退到 edge 语音。")
+            return "edge", None
+    return mode, reference or None
+
+
+def _do_homework(config, item: dict, parent_id: str = "") -> None:
     import asyncio
     from ets_demo.cli import _ets_do
     from ets_demo.ets import EtsSession
     import argparse
 
+    voice_mode, clone_reference = _voice_choice(config)
     homework_id = str(item.get("id", ""))
     resource_id = str(item.get("resource_id", ""))
     print()
-    print(f"开始自动完成：{item.get('name', '')} ({homework_id})")
+    print(f"开始自动完成：{item.get('name', '')} ({homework_id})  语音={voice_mode}"
+          + (f" 参考={clone_reference}" if clone_reference else ""))
     run_args = argparse.Namespace(
         command="ets-do",
         homework_id=homework_id,
         token_file=None,
-        parent_id=config.parent_id or "",
+        parent_id=parent_id,
         resource_id=resource_id,
         output_dir=Path("output/ets"),
-        voice_mode="edge",
+        voice_mode=voice_mode,
         evaluator="local",
         voice="en-US-JennyNeural",
         rate="-10%",
         pitch="+0Hz",
-        clone_reference=None,
+        clone_reference=Path(clone_reference) if clone_reference else None,
         score_overrides=None,
         target_total=None,
         no_upload=False,
@@ -204,7 +271,7 @@ def main() -> None:
     try:
         selected = _pick_homework(client, parent_id)
         for item in selected:
-            _do_homework(config, item)
+            _do_homework(config, item, parent_id=parent_id)
         if selected:
             print()
             print(f"完成，共处理 {len(selected)} 份作业。输出目录见 output/ets/")

@@ -1,0 +1,19 @@
+{
+  "ETS_PHONE": "",
+  "ETS_PASS": "",
+  "ETS_DEVICE_CODE": "",
+  "ETS_SESSION_FILE": "",
+  "ETS_PROXY": "",
+  "ETS_VOICE_MODE": "edge",
+  "ETS_CLONE_REFERENCE": "",
+  "ISE_APP_ID": "",
+  "ISE_API_KEY": "",
+  "ISE_API_SECRET": "",
+  "CLONE_TTS_URL": "",
+  "CLONE_TTS_RESULTS_URL": "",
+  "CLONE_TTS_API_KEY": "",
+  "HTTP_TTS_URL": "",
+  "HTTP_TTS_API_KEY": "",
+  "HTTP_TTS_RESULTS_URL": "",
+  "API_BASE_URL": ""
+}

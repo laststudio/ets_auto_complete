@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .config import EtsConfig
+from .config import EtsConfig, _env
 from .errors import EtsError
 from .homework import clean_html, parse_content_bytes
 from .interface import build_signed_payload, decode_response_body
@@ -27,7 +27,7 @@ ZIP_CDN_PREFIX = "https://cdn.subject.ets100.com/made/"
 
 
 def session_file() -> Path:
-    override = os.getenv("ETS_SESSION_FILE", "").strip()
+    override = _env("ETS_SESSION_FILE")
     return Path(override).expanduser() if override else DEFAULT_SESSION_FILE
 
 

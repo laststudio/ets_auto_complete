@@ -12,7 +12,15 @@ from pathlib import Path
 from typing import Any
 
 from .audio import synthesize_edge, synthesize_http
-from .config import CloneTtsConfig, DEFAULT_ETS_SECRET_KEY, EtsConfig, HttpTtsConfig, InterfaceConfig, IseConfig
+from .config import (
+    CloneTtsConfig,
+    DEFAULT_ETS_SECRET_KEY,
+    EtsConfig,
+    HttpTtsConfig,
+    InterfaceConfig,
+    IseConfig,
+    save_local,
+)
 from .errors import DemoError, EtsError
 from .ets import DEFAULT_SESSION_FILE, EtsClient, EtsSession, classify_homework, parse_homework_struct
 from .homework import extract_questions, read_content_json
@@ -275,27 +283,25 @@ def _ets_setup(args: argparse.Namespace) -> int:
 
     print("开始登录。请按提示逐项输入（默认值可用回车直接采用）：", file=sys.stderr)
 
-    api_url = _prompt("ETS_API_URL", default=os.getenv("ETS_API_URL", "https://api.ets100.com"))
-    secret_key = _prompt("ETS_SECRET_KEY", default=os.getenv("ETS_SECRET_KEY", DEFAULT_ETS_SECRET_KEY))
-    phone = _prompt("手机号", default=existing.phone or os.getenv("ETS_PHONE", ""))
+    api_url = _prompt("ETS_API_URL", default="https://api.ets100.com")
+    secret_key = _prompt("ETS_SECRET_KEY", default=DEFAULT_ETS_SECRET_KEY)
+    phone = _prompt("手机号", default=existing.phone or "")
     password = _prompt("密码", required=True, secret=True, default="")
     token_file = str(Path(args.token_file).resolve()) if args.token_file else None
 
-    overrides = {"api_url": api_url, "secret_key": secret_key, "phone": phone, "password": password}
     config = EtsConfig.from_env()
-    for key, value in overrides.items():
+    for key, value in (("api_url", api_url), ("secret_key", secret_key), ("phone", phone), ("password", password)):
         object.__setattr__(config, key, value)
-    os.environ["ETS_API_URL"] = api_url
-    os.environ["ETS_SECRET_KEY"] = secret_key
-    os.environ["ETS_PHONE"] = phone
-    os.environ["ETS_PASS"] = password
-    if token_file:
-        os.environ["ETS_SESSION_FILE"] = token_file
+    save_local(
+        {
+            "ETS_API_URL": api_url,
+            "ETS_SECRET_KEY": secret_key,
+            "ETS_PHONE": phone,
+            "ETS_PASS": password,
+        }
+    )
 
     print(file=sys.stderr)
-    config = EtsConfig.from_env()
-    for key, value in overrides.items():
-        object.__setattr__(config, key, value)
 
     def sms_code() -> str:
         return _prompt("短信验证码（新设备绑定，已发送至手机）", required=True)
@@ -316,9 +322,9 @@ def _ets_setup(args: argparse.Namespace) -> int:
             return 0
 
         items = client.get_homework_list(client.parent_id)
-        pending = [i for i in items if str(i.get("status", "0")) == "0"]
+        pending = [i for i in items if str(i.get("status", "0")) in ("0", "4")]
         if not pending:
-            print("没有待完成（status=0）的作业。", file=sys.stderr)
+            print("没有待完成（status=0/4）的作业。", file=sys.stderr)
             _json({"items": items})
             return 0
         print(file=sys.stderr)
@@ -343,8 +349,6 @@ def _ets_setup(args: argparse.Namespace) -> int:
         print(file=sys.stderr)
         print(f"开始自动完成：{homework_item.get('name', '')} ({homework_id})", file=sys.stderr)
         completed_at = datetime.now().strftime("%Y%m%d%H%M%S")
-        new_env = dict(os.environ)
-        new_env["ETS_SESSION_FILE"] = token_file or new_env.get("ETS_SESSION_FILE", "")
         crate = subprocess.run(
             [sys.executable, "-m", "ets_demo", "ets-do",
              homework_id,
@@ -352,7 +356,6 @@ def _ets_setup(args: argparse.Namespace) -> int:
              "--parent-id", client.parent_id or "",
              "--resource-id", resource_id,
              "--output-dir", f"output/ets/{homework_id}-{completed_at}"],
-            env=new_env,
         )
         if crate.returncode != 0:
             raise DemoError(f"自动完成失败，退出码 {crate.returncode}")
@@ -469,12 +472,12 @@ def _doctor() -> int:
     return 0 if required else 1
 
 
-def _progress(step: str, percent: int, message: str) -> None:
+def _progress(step: str, percent: int = 0, message: str = "") -> None:
     print(f"[{percent:3d}%] {message}", file=sys.stderr)
 
 
 def _ets_progress() -> Callable[[str, int, str], None]:
-    def inner(step: str, percent: int, message: str) -> None:
+    def inner(step: str, percent: int = 0, message: str = "") -> None:
         print(f"[{percent:3d}%] {message}", file=sys.stderr)
 
     return inner
@@ -500,7 +503,7 @@ async def fetch_real_homework(
     name = str(item.get("name", args.homework_id))
     set_id = str(item.get("set_id", args.homework_id))
 
-    progress("struct", "fetching homework structure")
+    progress("struct", message="fetching homework structure")
     if kind in {"pk", "vocab"}:
         struct = await loop.run_in_executor(
             None, client.get_homework_struct, args.homework_id, resource_id

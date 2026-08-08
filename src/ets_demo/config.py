@@ -1,14 +1,62 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from .errors import ConfigError
 
+LOCAL_CONFIG_FILE = Path.home() / ".ets_demo" / "config.local.json"
+
+
+def _load_local() -> dict[str, Any]:
+    """读取本地配置文件（对应原 PHP 的 config.local.php，含真实密钥，不上 Git）。"""
+    path = LOCAL_CONFIG_FILE
+    override = os.getenv("ETS_LOCAL_CONFIG", "").strip()
+    if override:
+        path = Path(override).expanduser()
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+_LOCAL_VALUES: dict[str, Any] = _load_local()
+
+
+def save_local(values: dict[str, Any]) -> None:
+    """把交互式配置持久化到本地配置文件。"""
+    LOCAL_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    merged = dict(_LOCAL_VALUES)
+    merged.update({k: v for k, v in values.items() if v is not None and v != ""})
+    LOCAL_CONFIG_FILE.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
 
 def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    """配置优先级：config.local.json > 环境变量 > 默认值。
+    环境变量兜底仅为本工具自身路径类选项保留（如 ETS_LOCAL_CONFIG /
+    ETS_SESSION_FILE），其余一律以 config.local.json 为准。"""
+    if name in _LOCAL_VALUES and _LOCAL_VALUES[name] not in (None, ""):
+        return str(_LOCAL_VALUES[name]).strip()
+    value = os.getenv(name, "")
+    return value.strip() if value else default
+
+
+def _env_float(name: str, default: str) -> float:
+    return float(_env(name, default))
+
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return _env(name, default).lower() not in {"", "0", "false", "no"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,13 +75,13 @@ class InterfaceConfig:
     def from_env(cls) -> "InterfaceConfig":
         return cls(
             api_base_url=_env("API_BASE_URL").rstrip("/"),
-            pid=_env("LOCAL_API_PID", "local-demo"),
-            secret_key=_env("LOCAL_API_SECRET", "local-demo"),
-            sn=_env("API_SN", "t"),
-            system=_env("API_SYSTEM", "4"),
-            version=_env("API_VERSION", "3"),
-            client_version=_env("API_CLIENT_VERSION", "5.4.5"),
-            timeout=float(_env("API_TIMEOUT", "30")),
+            pid="local-demo",
+            secret_key="local-demo",
+            sn="t",
+            system="4",
+            version="3",
+            client_version="5.4.5",
+            timeout=30.0,
         )
 
     def validate(self) -> None:
@@ -42,6 +90,7 @@ class InterfaceConfig:
         parsed = urlparse(self.api_base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ConfigError("API_BASE_URL must be an http(s) URL")
+
     def common_params(self) -> dict[str, object]:
         return {
             "sn": self.sn,
@@ -67,9 +116,9 @@ class IseConfig:
             app_id=_env("ISE_APP_ID"),
             api_key=_env("ISE_API_KEY"),
             api_secret=_env("ISE_API_SECRET"),
-            ws_url=_env("ISE_WS_URL", "wss://ise-api-dz-ets.xf-yun.com/v2/open-ise"),
-            open_timeout=float(_env("ISE_OPEN_TIMEOUT", "10")),
-            response_timeout=float(_env("ISE_RESPONSE_TIMEOUT", "60")),
+            ws_url="wss://ise-api-dz-ets.xf-yun.com/v2/open-ise",
+            open_timeout=10.0,
+            response_timeout=60.0,
         )
 
     def validate(self) -> None:
@@ -104,9 +153,9 @@ class CloneTtsConfig:
             submit_url=_env("CLONE_TTS_URL"),
             results_url=_env("CLONE_TTS_RESULTS_URL"),
             api_key=_env("CLONE_TTS_API_KEY"),
-            timeout=float(_env("CLONE_TTS_TIMEOUT", "30")),
-            poll_interval=float(_env("CLONE_TTS_POLL_INTERVAL", "2")),
-            max_wait=float(_env("CLONE_TTS_MAX_WAIT", "300")),
+            timeout=30.0,
+            poll_interval=2.0,
+            max_wait=300.0,
         )
 
     def validate(self) -> None:
@@ -145,14 +194,14 @@ class HttpTtsConfig:
         return cls(
             url=_env("HTTP_TTS_URL"),
             api_key=_env("HTTP_TTS_API_KEY"),
-            style=_env("HTTP_TTS_STYLE", "openai").lower(),
+            style="openai",
             results_url=_env("HTTP_TTS_RESULTS_URL"),
-            model=_env("HTTP_TTS_MODEL", "kokoro"),
-            voice=_env("HTTP_TTS_VOICE", "af_bella"),
-            speed=float(_env("HTTP_TTS_SPEED", "1.0")),
-            timeout=float(_env("HTTP_TTS_TIMEOUT", "120")),
-            poll_interval=float(_env("HTTP_TTS_POLL_INTERVAL", "1")),
-            max_wait=float(_env("HTTP_TTS_MAX_WAIT", "120")),
+            model="kokoro",
+            voice="af_bella",
+            speed=1.0,
+            timeout=120.0,
+            poll_interval=1.0,
+            max_wait=120.0,
         )
 
     def validate(self) -> None:
@@ -191,20 +240,19 @@ class EtsConfig:
     @classmethod
     def from_env(cls) -> "EtsConfig":
         return cls(
-            api_url=_env("ETS_API_URL", "https://api.ets100.com").rstrip("/"),
-            pid=_env("ETS_PID", "grlx"),
-            sn=_env("ETS_SN", "t"),
-            system=_env("ETS_SYSTEM", "4"),
-            version=_env("ETS_VERSION", "3"),
-            client_version=_env("ETS_CLIENT_VERSION", "5.4.5"),
-            secret_key=_env("ETS_SECRET_KEY", DEFAULT_ETS_SECRET_KEY),
+            api_url="https://api.ets100.com",
+            pid="grlx",
+            sn="t",
+            system="4",
+            version="3",
+            client_version="5.4.5",
+            secret_key=DEFAULT_ETS_SECRET_KEY,
             device_code=_env("ETS_DEVICE_CODE"),
             phone=_env("ETS_PHONE"),
             password=_env("ETS_PASS"),
-            timeout=float(_env("ETS_TIMEOUT", "30")),
-            disable_ssl_verify=_env("ETS_DISABLE_SSL_VERIFY", "1").lower()
-            not in {"", "0", "false", "no"},
-            proxy=_env("HTTPS_PROXY", ""),
+            timeout=30.0,
+            disable_ssl_verify=True,
+            proxy=_env("HTTPS_PROXY"),
         )
 
     def validate(self) -> None:

@@ -41,20 +41,20 @@ python -m ets_demo --help
 python release.py
 ```
 
-运行后依次进行：
+运行后自动进行：
 
 ```text
 欢迎横幅
- → 检测已保存账号（~/.ets_demo/session.json，有则询问是否直接使用）
- → 输入手机号
- → 输入密码（getpass，不显示）
- → 询问是否保存密码下次自动登录
+ → 检测已保存账号/配置（~/.ets_demo/config.local.json、session.json）
  → 自动登录（含设备重绑处理）
  → 解析父账号 parent_id
- → 列出待完成作业
- → 选择序号（多个用逗号分隔 / 0=全部 / 回车=退出）
- → 逐个自动完成并回传
+ → 选择作业分类（待完成 / 已完成 / 已过期）
+ → 选择序号（多个用逗号分隔 / 0=全部 / 回车=返回分类菜单）
+ → 逐个自动完成并通过云端回传
 ```
+
+首次运行若当前 Python 缺少依赖，脚本会自动创建 `venv/cli`、安装依赖并重启
+自身，之后都是秒开。签名密钥已内置，无需任何环境变量。
 
 首次运行若当前 Python 缺少依赖，脚本会自动创建 `venv/cli`、安装依赖并重启
 自身，之后都是秒开。签名密钥已内置，无需任何环境变量。
@@ -80,20 +80,45 @@ ets-demo ets-setup                      # 交互式登录 + 选择作业
 ## 真实 ETS 平台
 
 签名密钥已内置（`ETS_SECRET_KEY` 默认 `555ffbe95ccf4e9535a110170b445ab8`，
-与官方客户端一致），源码不保存明文密码。其余环境变量均为可选项：
+与官方客户端一致），源码不保存明文密码。平台参数（`ETS_API_URL`/`ETS_PID`/
+`ETS_SN`/`ETS_SYSTEM`/`ETS_VERSION`/`ETS_CLIENT_VERSION`）与官方客户端一致且已
+写死在 `EtsConfig.from_env()` 中，**不再需要任何环境变量**。
 
-```fish
-set -x ETS_API_URL https://api.ets100.com
-set -x ETS_PHONE 13800000000                   # 可选
-set -x ETS_PASS "..."                          # 可选，自动重登用
-set -x ETS_DEVICE_CODE ""                      # 留空则首次登录自动生成并保存
+所有可选的敏感配置统一从本地配置文件 `~/.ets_demo/config.local.json` 读取
+（对应原 PHP 的 `config.local.php`，含真实密钥，不上 Git），字段与 PHP 一致。
+参考模板见仓库根目录 `config.local.json.example`：
+
+```json
+{
+  "ETS_PHONE": "",
+  "ETS_PASS": "",
+  "ETS_DEVICE_CODE": "",
+  "ETS_SESSION_FILE": "",
+  "ETS_PROXY": "",
+  "ETS_VOICE_MODE": "edge",
+  "ETS_CLONE_REFERENCE": "",
+  "ISE_APP_ID": "",
+  "ISE_API_KEY": "",
+  "ISE_API_SECRET": "",
+  "CLONE_TTS_URL": "",
+  "CLONE_TTS_RESULTS_URL": "",
+  "CLONE_TTS_API_KEY": "",
+  "HTTP_TTS_URL": "",
+  "HTTP_TTS_API_KEY": "",
+  "HTTP_TTS_RESULTS_URL": "",
+  "API_BASE_URL": ""
+}
 ```
 
-若平台日后轮换签名密钥，可用环境变量覆盖内置默认值：
+优先级：`config.local.json` > 环境变量（仅两类路径类选项 `ETS_SESSION_FILE` /
+`ETS_LOCAL_CONFIG` 仍会读环境变量兜底）> 内置默认值。
 
-```fish
-set -x ETS_SECRET_KEY "555ffbe95ccf4e9535a110170b445ab8"
-```
+- 账号（`ETS_PHONE`/`ETS_PASS`）填在这里即支持 token 过期自动重登。
+- `ETS_VOICE_MODE`：`edge`（默认）/ `clone` / `http`；克隆时须填
+  `CLONE_TTS_URL` + `CLONE_TTS_RESULTS_URL` + `CLONE_TTS_API_KEY`，并用
+  `ETS_CLONE_REFERENCE` 指定参考音频路径。
+- 讯飞 ISE 评测填 `ISE_APP_ID` / `ISE_API_KEY` / `ISE_API_SECRET`（已逆向内置
+  默认 `wss://ise-api-dz-ets.xf-yun.com/v2/open-ise`）。
 
 登录（推荐用交互式引导 `ets-setup`，它会依次询问 API 地址、签名 key、手机号、
 密码，登录后列出待完成作业供选择）：
@@ -125,7 +150,7 @@ ets-demo ets-do 12345 --output-dir output/ets          # 输出目录
 ets-demo ets-do 12345 --no-upload                      # 只生成本地结果，不上传 OSS
 ets-demo ets-do 12345 --target-total 90                # 目标总分（vocab/pk）
 ets-demo ets-do 12345 --voice-mode clone --clone-reference ref.wav
-ets-demo ets-do 12345 --evaluator ise                  # 真机 ISE 评测
+ets-demo ets-do 12345 --evaluator ise                  # 真实 ISE 评测
 ```
 
 会话（`~/.ets_demo/session.json`）保存 token、设备码与 Base64 密码。token 失效
