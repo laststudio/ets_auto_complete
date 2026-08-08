@@ -146,7 +146,7 @@ class StudyWorkflow:
 
         self.progress("parse", 8, f"[1/8] loaded {len(homework.questions)} questions")
         ppr_response = {}
-        if self._should_send:
+        if self._should_send and homework.kind != "mock":
             batch = [{"entity_id": item.entity_id, "order": item.order} for item in homework.questions]
             ppr_response = self._call("ppr_resources", batch)
 
