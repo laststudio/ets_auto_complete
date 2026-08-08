@@ -504,10 +504,11 @@ class EtsClient:
                     merged.append(item)
         return merged
 
-    def get_homework_struct(self, homework_id: str, resource_id: str = "", token: str | None = None) -> JsonObject:
+    def get_homework_struct(self, homework_id: str, resource_id: str = "", parent_id: str = "", token: str | None = None) -> JsonObject:
         params = {
             **self.common(token),
             "id": str(homework_id),
+            "parent_account_id": parent_id or self.parent_id,
         }
         if resource_id:
             params["resource_id"] = resource_id
@@ -611,7 +612,7 @@ class EtsClient:
             {**self.common(token), **params},
         )
 
-    def exam_struct(self, exam_id: str, resource_id: str = "", token: str | None = None) -> JsonObject:
+    def exam_struct(self, exam_id: str, resource_id: str = "", parent_id: str = "", token: str | None = None) -> JsonObject:
         return self.call(
             "/m/exam/struct",
             "m/exam/struct",
@@ -619,6 +620,7 @@ class EtsClient:
                 **self.common(token),
                 "exam_id": str(exam_id),
                 "resource_id": str(resource_id),
+                "parent_account_id": parent_id or self.parent_id,
                 "scence_type": 0,
             },
         )

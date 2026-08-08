@@ -322,7 +322,7 @@ def _ets_setup(args: argparse.Namespace) -> int:
             return 0
 
         items = client.get_homework_list(client.parent_id)
-        pending = [i for i in items if str(i.get("status", "0")) in ("0", "4")]
+        pending = [i for i in items if str(i.get("status", "0")) not in ("1", "2")]
         if not pending:
             print("没有待完成（status=0/4）的作业。", file=sys.stderr)
             _json({"items": items})
@@ -411,7 +411,7 @@ def _ets_query(args: argparse.Namespace) -> int:
             _json({"parent_id": parent_id, "count": len(enriched), "items": enriched})
         else:
             resource_id = args.resource_id or ""
-            struct = client.get_homework_struct(args.homework_id, resource_id)
+            struct = client.get_homework_struct(args.homework_id, resource_id, parent_id=parent_id)
             questions = parse_homework_struct(struct, downloader=client._default_download)
             _json(
                 {
@@ -506,12 +506,12 @@ async def fetch_real_homework(
     progress("struct", message="fetching homework structure")
     if kind in {"pk", "vocab"}:
         struct = await loop.run_in_executor(
-            None, client.get_homework_struct, args.homework_id, resource_id
+            None, client.get_homework_struct, args.homework_id, resource_id, parent_id
         )
         questions = build_word_questions(struct)
         metadata = {"unit_id": 0, "book_id": 0}
     else:
-        questions = await run_question_download(client, args.homework_id, resource_id)
+        questions = await run_question_download(client, args.homework_id, resource_id, parent_id)
         metadata: dict = {}
 
     if kind == "composition":
@@ -536,7 +536,7 @@ async def fetch_real_homework(
 
     if kind == "mock":
         exam_body = await loop.run_in_executor(
-            None, client.exam_struct, set_id, resource_id
+            None, client.exam_struct, set_id, resource_id, parent_id
         )
         struct = exam_body
         quantity = exam_body
@@ -599,12 +599,12 @@ def build_word_questions(struct: dict) -> list[dict]:
 
 
 async def run_question_download(
-    client: EtsClient, homework_id: str, resource_id: str
+    client: EtsClient, homework_id: str, resource_id: str, parent_id: str = ""
 ) -> list[dict]:
     import asyncio
 
     loop = asyncio.get_event_loop()
-    struct = await loop.run_in_executor(None, client.get_homework_struct, homework_id, resource_id)
+    struct = await loop.run_in_executor(None, client.get_homework_struct, homework_id, resource_id, parent_id)
     if not isinstance(struct, dict):
         return []
     return parse_homework_struct(struct, downloader=client._default_download)
