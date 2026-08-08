@@ -205,9 +205,12 @@ def _add_score_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _ets_login(args: argparse.Namespace) -> int:
+    def sms_code() -> str:
+        return _prompt("短信验证码（新设备绑定，已发送至手机）", required=True)
+
     config = EtsConfig.from_env()
     with EtsClient(config) as client:
-        client.login(args.phone, args.password)
+        client.login(args.phone, args.password, code_provider=sms_code)
         try:
             client.parent_id = client.get_parent_id()
         except EtsError:
@@ -293,8 +296,12 @@ def _ets_setup(args: argparse.Namespace) -> int:
     config = EtsConfig.from_env()
     for key, value in overrides.items():
         object.__setattr__(config, key, value)
+
+    def sms_code() -> str:
+        return _prompt("短信验证码（新设备绑定，已发送至手机）", required=True)
+
     with EtsClient(config) as client:
-        client.login(phone, password)
+        client.login(phone, password, code_provider=sms_code)
         try:
             client.parent_id = client.get_parent_id()
         except EtsError:
@@ -302,6 +309,11 @@ def _ets_setup(args: argparse.Namespace) -> int:
         _build_env_config(client, overrides, args.token_file)
         print(file=sys.stderr)
         print(f"登录成功：{phone}  parent_id={client.parent_id or '(未解析)'}  token={client.token[:12]}...", file=sys.stderr)
+
+        if not client.parent_id:
+            print("未找到有效班级，请先在 ETS 官方客户端绑定/加入班级后重试。", file=sys.stderr)
+            _json({"items": []})
+            return 0
 
         items = client.get_homework_list(client.parent_id)
         pending = [i for i in items if str(i.get("status", "0")) == "0"]

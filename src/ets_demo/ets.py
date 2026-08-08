@@ -340,7 +340,12 @@ class EtsClient:
         except EtsError:
             return False
 
-    def login(self, phone: str, password: str) -> JsonObject:
+    def login(
+        self,
+        phone: str,
+        password: str,
+        code_provider: Callable[[], str] | None = None,
+    ) -> JsonObject:
         device_code = _resolved_device_code(self.config, self.session)
         params = {
             "sn": self.config.sn,
@@ -357,7 +362,11 @@ class EtsClient:
         result = self.request("/user/login", "user/login", params)
         code = result.get("code")
         if code in (30014, 30008, "30014", "30008"):
-            body = self.rebind(phone, password, device_code)
+            sms_code = "0"
+            if str(code) == "30008" and code_provider is not None:
+                self.send_sms(phone)
+                sms_code = code_provider() or "0"
+            body = self.rebind(phone, password, device_code, code=sms_code)
         elif result.get("code") not in (0, "0", 200, "200", None):
             raise EtsError(f"ETS login failed: {result.get('msg', result.get('code'))}")
         else:
@@ -373,13 +382,27 @@ class EtsClient:
         self.session.save()
         return body
 
-    def rebind(self, phone: str, password: str, device_code: str) -> JsonObject:
+    def send_sms(self, phone: str, use: str = "3", class_id: str = "1") -> JsonObject:
+        """发送短信验证码（用于新设备绑定，对应 code/send-user-exist）。"""
+        params = {
+            "sn": self.config.sn,
+            "phone": phone,
+            "email": "",
+            "class_id": class_id,
+            "use": use,
+            "system": self.config.system,
+            "global_client_version": self.config.client_version,
+            "sign_response": 1,
+        }
+        return self.call("/code/send-user-exist", "code/send-user-exist", params)
+
+    def rebind(self, phone: str, password: str, device_code: str, code: str = "0") -> JsonObject:
         params = {
             "sn": self.config.sn,
             "phone": phone,
             "email": "",
             "password": password,
-            "code": "0",
+            "code": code,
             "version": "2",
             "device_name": "1337",
             "device_code": device_code,
@@ -408,24 +431,44 @@ class EtsClient:
             "token": token or self.token,
             "version": "3",
         }
-        body = self.call("/m/ecard/list", "m/ecard/list", params)
-        accounts = body.get("data", []) if isinstance(body, dict) else []
-        if not isinstance(accounts, list):
-            accounts = []
+        try:
+            body = self.call("/m/ecard/list", "m/ecard/list", params)
+        except EtsError as exc:
+            if "80004" in str(exc) or "没有找到有效班级" in str(exc):
+                return ""
+            raise
+        accounts = self._ecard_accounts(body)
+        if not accounts:
+            raise EtsError("没有找到有效班级: m/ecard/list 返回空")
         for account in accounts:
             if (
                 str(account.get("status", "")) == "0"
                 and str(account.get("out_of_date", "")) == "0"
                 and str(account.get("mobile_status", "")) == "1"
             ):
-                parent_id = str(account.get("parent_id", ""))
+                parent_id = str(account.get("parent_id", "") or account.get("class_id", ""))
                 if parent_id:
                     return parent_id
         for account in accounts:
-            parent_id = str(account.get("parent_id", ""))
+            parent_id = str(account.get("parent_id", "") or account.get("class_id", ""))
             if parent_id:
                 return parent_id
-        raise EtsError("Unable to find a parent_id from m/ecard/list")
+        raise EtsError("没有找到有效班级: m/ecard/list 未返回 parent_id")
+
+    @staticmethod
+    def _ecard_accounts(body: JsonObject) -> list[JsonObject]:
+        """m/ecard/list 的 body 可能是 {"data": [...]} 或 {"0": {...}, "1": {...}}。"""
+        if not isinstance(body, dict):
+            return []
+        data = body.get("data", [])
+        if isinstance(data, list) and data:
+            return data
+        accounts: list[JsonObject] = []
+        for value in body.values():
+            if isinstance(value, dict) and not isinstance(value.get("data"), list):
+                if any(k in value for k in ("parent_id", "class_id", "status", "mobile_status")):
+                    accounts.append(value)
+        return accounts
 
     def get_homework_list(self, parent_id: str = "", token: str | None = None) -> list[JsonObject]:
         token = token or self.token

@@ -4,9 +4,12 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from ets_demo.config import EtsConfig
 from ets_demo.ets import (
     EtsClient,
+    EtsError,
     EtsSession,
     decode_password,
     encode_password,
@@ -95,6 +98,35 @@ def test_login_rebinds_on_30014():
     assert transport.calls[1]["path"] == "/user/rebind-code"
 
 
+def test_login_30008_sends_sms_and_uses_code_provider():
+    transport = FakeTransport(
+        [
+            env({"msg": "new device"}, code=30008),  # login
+            env({}),                                 # send sms
+            env({"token": "bound"}),                 # rebind with code
+        ]
+    )
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    seen = []
+    client.login("13800000000", "password", code_provider=lambda: seen.append("code") or "1234")
+    assert client.token == "bound"
+    assert seen == ["code"]
+    assert transport.calls[1]["path"] == "/code/send-user-exist"
+    params = _decode_payload(transport.calls[2]["payload"])["params"]
+    assert params["code"] == "1234"
+
+
+def test_login_30008_without_code_provider_uses_zero():
+    transport = FakeTransport(
+        [env({"msg": "new device"}, code=30008), env({"token": "bound"})]
+    )
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.login("13800000000", "password")
+    assert client.token == "bound"
+    params = _decode_payload(transport.calls[1]["payload"])["params"]
+    assert params["code"] == "0"
+
+
 def test_auto_relogin_on_token_expiry():
     transport = FakeTransport(
         [
@@ -170,6 +202,49 @@ def test_parse_homework_struct_extracts_lvread_and_zip():
     assert questions[0]["text"] == "Hello world."
     assert questions[-1]["category"] == "choose"
     assert questions[-1]["group_name"] == "题型1"
+
+
+def test_get_parent_id_parses_indexed_ecard_body():
+    body = {
+        "0": {"parent_id": "66", "status": "0", "out_of_date": "0", "mobile_status": "1"},
+        "1": {"parent_id": "77", "status": "0", "out_of_date": "0", "mobile_status": "1"},
+    }
+    transport = FakeTransport([env(body)])
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.token = "tok"
+    assert client.get_parent_id() == "66"
+    assert transport.calls[0]["path"] == "/m/ecard/list"
+
+
+def test_get_parent_id_falls_back_to_any_parent_id():
+    body = {"0": {"parent_id": "9", "status": "1", "out_of_date": "0", "mobile_status": "0"}}
+    transport = FakeTransport([env(body)])
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.token = "tok"
+    assert client.get_parent_id() == "9"
+
+
+def test_get_parent_id_uses_class_id_when_no_parent_id():
+    body = {"0": {"class_id": "88", "status": "0", "out_of_date": "0", "mobile_status": "1"}}
+    transport = FakeTransport([env(body)])
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.token = "tok"
+    assert client.get_parent_id() == "88"
+
+
+def test_get_parent_id_returns_empty_on_80004():
+    transport = FakeTransport([env({"msg": "没有找到有效班级"}, code=80004)])
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.token = "tok"
+    assert client.get_parent_id() == ""
+
+
+def test_get_parent_id_raises_on_other_errors():
+    transport = FakeTransport([env({"msg": "boom"}, code=9999)])
+    client = EtsClient(make_config(), transport=transport, clock=lambda: 1)
+    client.token = "tok"
+    with pytest.raises(EtsError):
+        client.get_parent_id()
 
 
 def test_session_roundtrip(tmp_path):

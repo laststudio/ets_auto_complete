@@ -82,9 +82,12 @@ def _gather_credentials(saved: dict) -> tuple[str, str]:
 def _login(config, phone: str, password: str) -> dict:
     from ets_demo.ets import EtsClient, EtsError, EtsSession
 
+    def sms_code() -> str:
+        return input("请输入短信验证码（新设备需绑定，已发送至手机）: ").strip()
+
     client = EtsClient(config)
     try:
-        client.login(phone, password)
+        client.login(phone, password, code_provider=sms_code)
         try:
             client.parent_id = client.get_parent_id()
         except EtsError:
@@ -102,11 +105,17 @@ def _login(config, phone: str, password: str) -> dict:
     finally:
         client.close()
 
-
 def _pick_homework(client, parent_id: str) -> list[dict]:
-    from ets_demo.ets import classify_homework
+    from ets_demo.ets import EtsError, classify_homework
 
-    items = client.get_homework_list(parent_id)
+    try:
+        items = client.get_homework_list(parent_id)
+    except EtsError as exc:
+        if "80004" in str(exc) or "没有找到有效班级" in str(exc):
+            print(f"错误: {exc}")
+            print("提示：该账号未加入任何班级，或需要先在 ETS 官方客户端绑定班级。")
+            return []
+        raise
     pending = [item for item in items if str(item.get("status", "0")) == "0"]
     if not pending:
         print("没有待完成（status=0）的作业。")
@@ -182,11 +191,18 @@ def main() -> None:
     print()
     print("正在登录 ...")
     logged = _login(config, phone, password)
-    print(f"登录成功！parent_id={logged['parent_id'] or '(未解析)'}  token={logged['token'][:12]}...")
+    parent_id = logged["parent_id"]
+    if parent_id:
+        print(f"登录成功！parent_id={parent_id}  token={logged['token'][:12]}...")
+    else:
+        print(f"登录成功！token={logged['token'][:12]}...")
+        print("注意：该账号未找到有效班级（m/ecard/list 无 parent_id）。")
+        print("      请先在 ETS 官方客户端绑定/加入班级后重试，否则作业无法列出。")
+        return
 
     client = logged["client"]
     try:
-        selected = _pick_homework(client, logged["parent_id"])
+        selected = _pick_homework(client, parent_id)
         for item in selected:
             _do_homework(config, item)
         if selected:
