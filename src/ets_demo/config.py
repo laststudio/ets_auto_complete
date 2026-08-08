@@ -169,6 +169,9 @@ class HttpTtsConfig:
                 raise ConfigError("HTTP_TTS_RESULTS_URL must be an http(s) URL")
 
 
+DEFAULT_ETS_SECRET_KEY = "555ffbe95ccf4e9535a110170b445ab8"
+
+
 @dataclass(frozen=True, slots=True)
 class EtsConfig:
     api_url: str = "https://api.ets100.com"
@@ -177,7 +180,7 @@ class EtsConfig:
     system: str = "4"
     version: str = "3"
     client_version: str = "5.4.5"
-    secret_key: str = ""
+    secret_key: str = DEFAULT_ETS_SECRET_KEY
     device_code: str = ""
     phone: str = ""
     password: str = ""
@@ -194,7 +197,7 @@ class EtsConfig:
             system=_env("ETS_SYSTEM", "4"),
             version=_env("ETS_VERSION", "3"),
             client_version=_env("ETS_CLIENT_VERSION", "5.4.5"),
-            secret_key=_env("ETS_SECRET_KEY"),
+            secret_key=_env("ETS_SECRET_KEY", DEFAULT_ETS_SECRET_KEY),
             device_code=_env("ETS_DEVICE_CODE"),
             phone=_env("ETS_PHONE"),
             password=_env("ETS_PASS"),
@@ -207,8 +210,6 @@ class EtsConfig:
     def validate(self) -> None:
         if not self.api_url:
             raise ConfigError("ETS_API_URL is required")
-        if not self.secret_key:
-            raise ConfigError("ETS_SECRET_KEY is required for real ETS calls")
         parsed = urlparse(self.api_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ConfigError("ETS_API_URL must be an http(s) URL")

@@ -26,6 +26,11 @@ DEFAULT_SESSION_FILE = Path.home() / ".ets_demo" / "session.json"
 ZIP_CDN_PREFIX = "https://cdn.subject.ets100.com/made/"
 
 
+def session_file() -> Path:
+    override = os.getenv("ETS_SESSION_FILE", "").strip()
+    return Path(override).expanduser() if override else DEFAULT_SESSION_FILE
+
+
 def _http_context(config: EtsConfig) -> Any:
     if config.disable_ssl_verify:
         context = ssl.create_default_context()
@@ -46,7 +51,7 @@ class EtsSession:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "EtsSession":
-        path = path or DEFAULT_SESSION_FILE
+        path = path or session_file()
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -61,7 +66,7 @@ class EtsSession:
         )
 
     def save(self, path: Path | None = None) -> None:
-        path = path or DEFAULT_SESSION_FILE
+        path = path or session_file()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.updated_at = int(time.time())
         path.write_text(

@@ -1,8 +1,9 @@
 # Local Study Workflow CLI
 
-这是从原 PHP 程序迁移出的独立 Python CLI。默认不内置任何作业平台域名，也不保存
-明文手机号、密码、设备码或平台 token——但你可以通过配置启用**真实 ETS 平台登录
-与自动完成**（见下方「真实 ETS 平台」与「一键安装 release.py」）。
+这是从原 PHP 程序迁移出的独立 Python CLI。签名密钥（`ETS_SECRET_KEY`）已内置
+（与官方客户端一致，`555ffbe95ccf4e9535a110170b445ab8`），不保存明文手机号、
+密码、设备码或平台 token。通过下面的命令即可启用**真实 ETS 平台登录与自动完成**
+（见下方「一键安装 release.py」与「真实 ETS 平台」）。
 
 本地模式保留的部分包括：
 
@@ -32,60 +33,76 @@ ets-demo doctor
 python -m ets_demo --help
 ```
 
-## 一键安装与引导（release.py）
+## 一键运行（release.py）
 
-仓库根目录的 `release.py` 会构建 wheel、创建一个隔离的 Python venv、把 `ets-demo`
-CLI 装进去，然后输出登录指引：
+仓库根目录的 `release.py` 是**开箱即用的交互式程序**，直接运行即可：
 
 ```fish
 python release.py
 ```
 
-参数：
+运行后依次进行：
 
 ```text
---venv PATH      复用/创建指定 venv，并往其中安装（不指定则新建 venv/cli）
---python PATH    指定用于创建全新 venv 的解释器（默认使用当前 python）
---no-build       跳过构建，直接以源码方式安装当前目录
+欢迎横幅
+ → 检测已保存账号（~/.ets_demo/session.json，有则询问是否直接使用）
+ → 输入手机号
+ → 输入密码（getpass，不显示）
+ → 询问是否保存密码下次自动登录
+ → 自动登录（含设备重绑处理）
+ → 解析父账号 parent_id
+ → 列出待完成作业
+ → 选择序号（多个用逗号分隔 / 0=全部 / 回车=退出）
+ → 逐个自动完成并回传
 ```
 
-`--venv` 指向的目录如果不存在会被自动创建。安装完成后脚本会运行 `ets-demo doctor`
-做健康检查，并打印：
+首次运行若当前 Python 缺少依赖，脚本会自动创建 `venv/cli`、安装依赖并重启
+自身，之后都是秒开。签名密钥已内置，无需任何环境变量。
 
-- 临时/目标 venv 的 CLI 路径
-- 需要导出的环境变量（`ETS_SECRET_KEY`，可选 `ETS_PHONE`/`ETS_PASS`）
-- `ets-login 手机号 密码` 的引导登录命令
-- `ets-list` / `ets-do` / `ets-parent` 的用法
+完成后输出在 `output/ets/<homework_id>-<时间戳>/`。
 
-### 完整流程
+### CLI 命令（可选）
+
+`release.py` 打包的 CLI 也在 `venv/cli/bin/ets-demo`，可手动使用：
 
 ```fish
-set -x ETS_SECRET_KEY "你的 secret key"    # 必填，与官方客户端一致
-set -x ETS_PHONE "13800000000"               # 可选，token 过期时自动重登
-set -x ETS_PASS "你的密码"                    # 可选，随会话保存为 Base64
-set -x PATH ~/Projects/ets_auto_complete/venv/cli/bin $PATH   # 参考 release.py 输出
+set -x PATH ~/Projects/ets_auto_complete/venv/cli/bin $PATH
 
-ets-demo ets-login 13800000000 密码     # 首次引导，保存 ~/.ets_demo/session.json
-ets-demo ets-parent                     # 解析父账号 parent_id（登录时已尝试）
+ets-demo ets-login 13800000000 密码     # 手动登录
+ets-demo ets-parent                     # 解析父账号 parent_id
 ets-demo ets-list                       # 列出真实作业
 ets-demo ets-do <homework_id>           # 自动完成一份作业
+ets-demo ets-setup                      # 交互式登录 + 选择作业
 ```
 
 登录凭据保存在 `~/.ets_demo/session.json`，权限为 `0600`。
 
 ## 真实 ETS 平台
 
-通过环境配置启用（源码中不内置 `ETS_SECRET_KEY`，也不保存明文密码）：
+签名密钥已内置（`ETS_SECRET_KEY` 默认 `555ffbe95ccf4e9535a110170b445ab8`，
+与官方客户端一致），源码不保存明文密码。其余环境变量均为可选项：
 
 ```fish
 set -x ETS_API_URL https://api.ets100.com
-set -x ETS_SECRET_KEY "你的 secret key"        # 签名密钥，必填
 set -x ETS_PHONE 13800000000                   # 可选
 set -x ETS_PASS "..."                          # 可选，自动重登用
 set -x ETS_DEVICE_CODE ""                      # 留空则首次登录自动生成并保存
 ```
 
-登录：
+若平台日后轮换签名密钥，可用环境变量覆盖内置默认值：
+
+```fish
+set -x ETS_SECRET_KEY "555ffbe95ccf4e9535a110170b445ab8"
+```
+
+登录（推荐用交互式引导 `ets-setup`，它会依次询问 API 地址、签名 key、手机号、
+密码，登录后列出待完成作业供选择）：
+
+```fish
+ets-demo ets-setup
+```
+
+手动登录：
 
 ```fish
 ets-demo ets-login 13800000000 你的密码

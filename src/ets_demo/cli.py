@@ -5,14 +5,16 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .audio import synthesize_edge, synthesize_http
-from .config import CloneTtsConfig, EtsConfig, HttpTtsConfig, InterfaceConfig, IseConfig
+from .config import CloneTtsConfig, DEFAULT_ETS_SECRET_KEY, EtsConfig, HttpTtsConfig, InterfaceConfig, IseConfig
 from .errors import DemoError, EtsError
-from .ets import EtsClient, EtsSession, classify_homework, parse_homework_struct
+from .ets import DEFAULT_SESSION_FILE, EtsClient, EtsSession, classify_homework, parse_homework_struct
 from .homework import extract_questions, read_content_json
 from .interface import InterfaceClient
 from .ise import IseEvaluator
@@ -150,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
     ets_login.add_argument("password")
     ets_login.add_argument("--token-file", type=Path, help="Session file to save (default ~/.ets_demo/session.json)")
 
+    ets_setup = commands.add_parser(
+        "ets-setup",
+        help="Interactive wizard: configure credentials, log in, pick a homework, and complete it",
+    )
+    ets_setup.add_argument("--token-file", type=Path)
+
     ets_list = commands.add_parser("ets-list", help="List homework from the real ETS platform")
     ets_list.add_argument("--token-file", type=Path)
     ets_list.add_argument("--parent-id", default="")
@@ -213,6 +221,143 @@ def _ets_login(args: argparse.Namespace) -> int:
     session.save(Path(args.token_file) if args.token_file else None)
     _json({"token": client.token, "parent_id": client.parent_id, "phone": client.session.phone})
     return 0
+
+
+def _build_env_config(cli: EtsClient, overrides: dict[str, str], token_file: Path | None) -> None:
+    """Persist interactive choices back into cli.config and the session file."""
+    config = cli.config
+    for key, value in overrides.items():
+        if isinstance(config, EtsConfig):
+            object.__setattr__(config, key, value)
+    session = EtsSession.load(token_file)
+    session.phone = cli.session.phone or session.phone
+    session.password_enc = cli.session.password_enc or session.password_enc
+    session.token = cli.token or session.token
+    session.device_code = cli.session.device_code or session.device_code
+    session.parent_id = cli.parent_id or session.parent_id
+    session.save(Path(token_file) if token_file else None)
+
+
+def _prompt(label: str, *, required: bool = True, secret: bool = False, default: str = "") -> str:
+    import getpass
+    import sys
+
+    suffix = f" [{default}]" if default else ""
+    prompt = f"{label}{suffix}: "
+    while True:
+        try:
+            if secret and sys.stdin.isatty():
+                value = getpass.getpass(prompt)
+            else:
+                value = input(prompt).strip()
+        except EOFError:
+            print()
+            raise DemoError("Interactive input aborted")
+        value = value or default
+        if not value and required:
+            print("  不能为空，请重新输入。", file=sys.stderr)
+            continue
+        return value
+
+
+def _ets_setup(args: argparse.Namespace) -> int:
+    import sys
+
+    print("ETS 平台交互式引导", file=sys.stderr)
+    print("将依次询问：API 地址、签名 key、手机号、密码，然后自动登录并列出作业。", file=sys.stderr)
+
+    existing = EtsSession.load(args.token_file)
+    print(file=sys.stderr)
+    print(f"当前已保存会话: 手机号={existing.phone or '(无)'} token={'有' if existing.token else '无'}", file=sys.stderr)
+
+    print("开始登录。请按提示逐项输入（默认值可用回车直接采用）：", file=sys.stderr)
+
+    api_url = _prompt("ETS_API_URL", default=os.getenv("ETS_API_URL", "https://api.ets100.com"))
+    secret_key = _prompt("ETS_SECRET_KEY", default=os.getenv("ETS_SECRET_KEY", DEFAULT_ETS_SECRET_KEY))
+    phone = _prompt("手机号", default=existing.phone or os.getenv("ETS_PHONE", ""))
+    password = _prompt("密码", required=True, secret=True, default="")
+    token_file = str(Path(args.token_file).resolve()) if args.token_file else None
+
+    overrides = {"api_url": api_url, "secret_key": secret_key, "phone": phone, "password": password}
+    config = EtsConfig.from_env()
+    for key, value in overrides.items():
+        object.__setattr__(config, key, value)
+    os.environ["ETS_API_URL"] = api_url
+    os.environ["ETS_SECRET_KEY"] = secret_key
+    os.environ["ETS_PHONE"] = phone
+    os.environ["ETS_PASS"] = password
+    if token_file:
+        os.environ["ETS_SESSION_FILE"] = token_file
+
+    print(file=sys.stderr)
+    config = EtsConfig.from_env()
+    for key, value in overrides.items():
+        object.__setattr__(config, key, value)
+    with EtsClient(config) as client:
+        client.login(phone, password)
+        try:
+            client.parent_id = client.get_parent_id()
+        except EtsError:
+            client.parent_id = ""
+        _build_env_config(client, overrides, args.token_file)
+        print(file=sys.stderr)
+        print(f"登录成功：{phone}  parent_id={client.parent_id or '(未解析)'}  token={client.token[:12]}...", file=sys.stderr)
+
+        items = client.get_homework_list(client.parent_id)
+        pending = [i for i in items if str(i.get("status", "0")) == "0"]
+        if not pending:
+            print("没有待完成（status=0）的作业。", file=sys.stderr)
+            _json({"items": items})
+            return 0
+        print(file=sys.stderr)
+        print("待完成作业：", file=sys.stderr)
+        for index, item in enumerate(pending):
+            print(f"  {index + 1}. {item.get('name', '')}  id={item.get('id', '')}  {classify_homework(item)}", file=sys.stderr)
+        choice = _prompt(
+            f"选择要自动完成的作业序号 (1-{len(pending)})，或输入 seek 跳过",
+            required=True,
+        )
+        if choice.strip().lower() == "seek":
+            print("已跳过自动完成。", file=sys.stderr)
+            return 0
+        try:
+            homework_idx = int(choice) - 1
+            homework_item = pending[homework_idx]
+        except (ValueError, IndexError):
+            raise DemoError(f"无效序号: {choice}")
+
+        homework_id = str(homework_item.get("id", ""))
+        resource_id = str(homework_item.get("resource_id", ""))
+        print(file=sys.stderr)
+        print(f"开始自动完成：{homework_item.get('name', '')} ({homework_id})", file=sys.stderr)
+        completed_at = datetime.now().strftime("%Y%m%d%H%M%S")
+        new_env = dict(os.environ)
+        new_env["ETS_SESSION_FILE"] = token_file or new_env.get("ETS_SESSION_FILE", "")
+        crate = subprocess.run(
+            [sys.executable, "-m", "ets_demo", "ets-do",
+             homework_id,
+             "--token-file", token_file or str(DEFAULT_SESSION_FILE),
+             "--parent-id", client.parent_id or "",
+             "--resource-id", resource_id,
+             "--output-dir", f"output/ets/{homework_id}-{completed_at}"],
+            env=new_env,
+        )
+        if crate.returncode != 0:
+            raise DemoError(f"自动完成失败，退出码 {crate.returncode}")
+        return 0
+
+
+def _parse_choice(value: str, upper: int) -> int:
+    value = value.strip()
+    if not value:
+        raise DemoError(f"请输入 1-{upper} 的序号")
+    try:
+        idx = int(value)
+    except ValueError:
+        raise DemoError(f"请输入 1-{upper} 的序号")
+    if idx < 1 or idx > upper:
+        raise DemoError(f"序号必须在 1-{upper} 之间")
+    return idx - 1
 
 
 def _ets_session(args: argparse.Namespace) -> EtsSession:
@@ -298,7 +443,7 @@ def _doctor() -> int:
         "clone_tts_configured": all((clone.submit_url, clone.results_url, clone.api_key)),
         "http_tts_configured": bool(http_tts.url),
         "ise_configured": all((ise.app_id, ise.api_key, ise.api_secret)),
-        "ets_configured": bool(ets.secret_key),
+        "ets_configured": bool(ets.secret_key) and ets.api_url.startswith("http"),
         "ets_saved_session": bool(EtsSession.load().token),
     }
     for module in ("edge_tts", "aiohttp", "websockets"):
@@ -530,8 +675,8 @@ async def _run_async(args: argparse.Namespace) -> int:
     raise DemoError(f"Unsupported asynchronous command: {args.command}")
 
 
-async def _ets_do(args: argparse.Namespace) -> int:
-    config = EtsConfig.from_env()
+async def _ets_do(args: argparse.Namespace, config: EtsConfig | None = None) -> int:
+    config = config or EtsConfig.from_env()
     with EtsClient(config) as client:
         session = EtsSession.load(args.token_file)
         if not session.token:
@@ -579,8 +724,10 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor()
         if args.command in {"tts", "http-tts", "ise", "pipeline", "run", "ets-do"}:
             return asyncio.run(_run_async(args))
-        if args.command == "ets-login":
-            return _ets_login(args)
+        if args.command in {"ets-login", "ets-setup"}:
+            if args.command == "ets-login":
+                return _ets_login(args)
+            return _ets_setup(args)
         if args.command == "ets-parent":
             return _ets_parent(args)
         if args.command in {"ets-list", "ets-struct"}:
