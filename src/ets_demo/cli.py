@@ -535,18 +535,22 @@ async def fetch_real_homework(
                 ]
 
     if kind == "mock":
-        exam_body = await loop.run_in_executor(
-            None, client.exam_struct, set_id, resource_id, parent_id
-        )
-        struct = exam_body
-        quantity = exam_body
-        content = exam_body.get("content", []) if isinstance(exam_body, dict) else []
         combo = ""
-        if isinstance(content, list):
-            for c in content:
-                if isinstance(c, dict) and c.get("combination_id"):
-                    combo = str(c.get("combination_id", ""))
-                    break
+        fallback_exam = False
+        if not questions:
+            try:
+                exam_body = await loop.run_in_executor(
+                    None, client.exam_struct, set_id, resource_id, parent_id
+                )
+                struct = exam_body
+                content = exam_body.get("content", []) if isinstance(exam_body, dict) else []
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("combination_id"):
+                            combo = str(c.get("combination_id", ""))
+                            break
+            except Exception:
+                fallback_exam = True
         if combo:
             metadata["combination_id"] = combo
 

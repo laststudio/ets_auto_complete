@@ -152,7 +152,7 @@ class StudyWorkflow:
 
         results: list[QuestionResult] = []
         total_use_time = 0
-        maximum_per_question = homework.total_point / len(homework.questions)
+        maximum_per_question = homework.total_point / len(homework.questions) if homework.questions else 0
         evaluator = IseEvaluator(self.options.ise_config) if self.options.evaluator == "ise" else None
 
         for index, question in enumerate(homework.questions):
@@ -293,7 +293,10 @@ class StudyWorkflow:
         if self._should_send and homework.kind == "mock":
             combination_id = str(homework.metadata.get("combination_id", ""))
             if not combination_id and self._is_real:
-                exam_body = self._call("exam_struct", homework.set_id, homework.resource_id)
+                try:
+                    exam_body = self._call("exam_struct", homework.set_id, homework.resource_id, self.options.parent_account_id)
+                except Exception:
+                    exam_body = None
                 if isinstance(exam_body, dict):
                     combinations = exam_body.get("combination", [])
                     if isinstance(combinations, list) and combinations and isinstance(combinations[0], dict):
