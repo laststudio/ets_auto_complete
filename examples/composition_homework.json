@@ -1,0 +1,17 @@
+{
+  "id": "demo-composition-001",
+  "name": "Local Composition Practice",
+  "kind": "composition",
+  "resource_id": "local-composition-resource",
+  "questions": [
+    {
+      "entity_id": "composition-1",
+      "order": 0,
+      "question_id": 3001,
+      "text": "Write about a useful study habit.",
+      "answer": "A useful study habit is reviewing mistakes after practice. It makes later feedback easier to understand.",
+      "category": "composition",
+      "structure_type": "composition"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "demo-vocab-001",
+  "name": "Local Vocabulary Training",
+  "kind": "vocab",
+  "total_point": 100,
+  "resource_id": "local-vocab-resource",
+  "questions": [
+    {
+      "entity_id": "vocab-1",
+      "order": 0,
+      "text": "library",
+      "category": "word",
+      "structure_type": "word_question",
+      "word_id": 201,
+      "question_id": 2001,
+      "question_type": 19,
+      "answer": "图书馆",
+      "translate": "图书馆"
+    },
+    {
+      "entity_id": "vocab-2",
+      "order": 1,
+      "text": "practice",
+      "category": "word",
+      "structure_type": "word_question",
+      "word_id": 202,
+      "question_id": 2002,
+      "question_type": 16,
+      "answer": "practice"
+    }
+  ]
+}

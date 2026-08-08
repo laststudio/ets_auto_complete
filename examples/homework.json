@@ -1,0 +1,36 @@
+{
+  "id": "demo-english-001",
+  "name": "Local English Practice",
+  "total_point": 30,
+  "resource_id": "local-resource-001",
+  "set_id": "local-set-001",
+  "questions": [
+    {
+      "entity_id": "read-1",
+      "order": 0,
+      "text": "Hello, this is a local speaking practice.",
+      "category": "read_sentence",
+      "structure_type": "collector.read"
+    },
+    {
+      "entity_id": "choose-1",
+      "order": 1,
+      "text": "The library",
+      "category": "choose",
+      "structure_type": "collector.choose",
+      "correct_option": "B",
+      "options": [
+        {"id": "A", "text": "The classroom"},
+        {"id": "B", "text": "The library"},
+        {"id": "C", "text": "The playground"}
+      ]
+    },
+    {
+      "entity_id": "read-2",
+      "order": 2,
+      "text": "Practice makes progress when feedback is clear.",
+      "category": "read_sentence",
+      "structure_type": "collector.repeat_essay"
+    }
+  ]
+}

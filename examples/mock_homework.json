@@ -1,0 +1,29 @@
+{
+  "id": "demo-mock-001",
+  "name": "Local Speaking Mock Exam",
+  "kind": "mock",
+  "total_point": 20,
+  "resource_id": "local-mock-resource",
+  "set_id": "local-exam-001",
+  "metadata": {
+    "combination_id": "local-combination-001"
+  },
+  "questions": [
+    {
+      "entity_id": "mock-choice-1",
+      "order": 0,
+      "text": "The library",
+      "category": "choose",
+      "structure_type": "collector.choose",
+      "correct_option": "B"
+    },
+    {
+      "entity_id": "mock-choice-2",
+      "order": 1,
+      "text": "At nine o'clock",
+      "category": "choose",
+      "structure_type": "collector.choose",
+      "correct_option": "C"
+    }
+  ]
+}

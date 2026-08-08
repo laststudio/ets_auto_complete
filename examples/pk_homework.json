@@ -1,0 +1,40 @@
+{
+  "id": "demo-pk-001",
+  "name": "Local Word PK",
+  "kind": "pk",
+  "total_point": 100,
+  "resource_id": "local-pk-resource",
+  "metadata": {
+    "book_id": 10,
+    "unit_id": 20
+  },
+  "questions": [
+    {
+      "entity_id": "pk-1",
+      "order": 0,
+      "text": "apple",
+      "category": "choose",
+      "structure_type": "word_question",
+      "word_id": 101,
+      "question_id": 1001,
+      "question_type": 6,
+      "answer": "B",
+      "options": [
+        {"option_name": "A", "option_value": "banana"},
+        {"option_name": "B", "option_value": "apple"}
+      ]
+    },
+    {
+      "entity_id": "pk-2",
+      "order": 1,
+      "text": "progress",
+      "category": "word",
+      "structure_type": "word_question",
+      "word_id": 102,
+      "question_id": 1002,
+      "question_type": 20,
+      "answer": "progress",
+      "translate": "进步"
+    }
+  ]
+}
