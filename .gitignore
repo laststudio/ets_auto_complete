@@ -1,5 +1,6 @@
 .env
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -11,3 +12,5 @@ output/
 *.wav
 *.pcm
 *.zip
+.editorconfig
+.DS_Store

@@ -1,9 +1,10 @@
 # Local Study Workflow CLI
 
-这是从原 PHP 程序迁移出的独立 Python CLI。程序不包含登录实现，不内置任何作业平台
-域名，也不保存手机号、密码、设备码或平台 token。
+这是从原 PHP 程序迁移出的独立 Python CLI。默认不内置任何作业平台域名，也不保存
+明文手机号、密码、设备码或平台 token——但你可以通过配置启用**真实 ETS 平台登录
+与自动完成**（见下方「真实 ETS 平台」与「一键安装 release.py」）。
 
-保留的部分包括：
+本地模式保留的部分包括：
 
 - 原 Base64 请求 envelope、MD5 签名和响应解码格式
 - 作业列表、结构、开始、资源映射、预上传、逐题同步、用时和汇总接口方法
@@ -30,6 +31,90 @@ ets-demo doctor
 ```fish
 python -m ets_demo --help
 ```
+
+## 一键安装与引导（release.py）
+
+仓库根目录的 `release.py` 会构建 wheel、创建一个隔离的 Python venv、把 `ets-demo`
+CLI 装进去，然后输出登录指引：
+
+```fish
+python release.py
+```
+
+参数：
+
+```text
+--venv PATH      复用/创建指定 venv，并往其中安装（不指定则新建 venv/cli）
+--python PATH    指定用于创建全新 venv 的解释器（默认使用当前 python）
+--no-build       跳过构建，直接以源码方式安装当前目录
+```
+
+`--venv` 指向的目录如果不存在会被自动创建。安装完成后脚本会运行 `ets-demo doctor`
+做健康检查，并打印：
+
+- 临时/目标 venv 的 CLI 路径
+- 需要导出的环境变量（`ETS_SECRET_KEY`，可选 `ETS_PHONE`/`ETS_PASS`）
+- `ets-login 手机号 密码` 的引导登录命令
+- `ets-list` / `ets-do` / `ets-parent` 的用法
+
+### 完整流程
+
+```fish
+set -x ETS_SECRET_KEY "你的 secret key"    # 必填，与官方客户端一致
+set -x ETS_PHONE "13800000000"               # 可选，token 过期时自动重登
+set -x ETS_PASS "你的密码"                    # 可选，随会话保存为 Base64
+set -x PATH ~/Projects/ets_auto_complete/venv/cli/bin $PATH   # 参考 release.py 输出
+
+ets-demo ets-login 13800000000 密码     # 首次引导，保存 ~/.ets_demo/session.json
+ets-demo ets-parent                     # 解析父账号 parent_id（登录时已尝试）
+ets-demo ets-list                       # 列出真实作业
+ets-demo ets-do <homework_id>           # 自动完成一份作业
+```
+
+登录凭据保存在 `~/.ets_demo/session.json`，权限为 `0600`。
+
+## 真实 ETS 平台
+
+通过环境配置启用（源码中不内置 `ETS_SECRET_KEY`，也不保存明文密码）：
+
+```fish
+set -x ETS_API_URL https://api.ets100.com
+set -x ETS_SECRET_KEY "你的 secret key"        # 签名密钥，必填
+set -x ETS_PHONE 13800000000                   # 可选
+set -x ETS_PASS "..."                          # 可选，自动重登用
+set -x ETS_DEVICE_CODE ""                      # 留空则首次登录自动生成并保存
+```
+
+登录：
+
+```fish
+ets-demo ets-login 13800000000 你的密码
+```
+
+查询与完成：
+
+```fish
+ets-demo ets-parent                  # 解析 parent_id（登录时也会尝试）
+ets-demo ets-list                    # 三类状态合并后的作业列表
+ets-demo ets-struct <homework_id>    # 拉取并解析作业结构
+ets-demo ets-score <homework_id>     # 读取作业分数
+ets-demo ets-do <homework_id>        # 自动完成：拉结构 → 合成/评分 → 上传回传
+```
+
+`ets-do` 常用参数：
+
+```bash
+ets-demo ets-do 12345 --output-dir output/ets          # 输出目录
+ets-demo ets-do 12345 --no-upload                      # 只生成本地结果，不上传 OSS
+ets-demo ets-do 12345 --target-total 90                # 目标总分（vocab/pk）
+ets-demo ets-do 12345 --voice-mode clone --clone-reference ref.wav
+ets-demo ets-do 12345 --evaluator ise                  # 真机 ISE 评测
+```
+
+会话（`~/.ets_demo/session.json`）保存 token、设备码与 Base64 密码。token 失效
+时若配置了 `ETS_PHONE`/`ETS_PASS`，客户端会自动重新登录并重试。
+
+`ets-login` / `ets-list` / `ets-do` 还支持 `--token-file` 指向其他会话文件。
 
 ## 本地作业
 
