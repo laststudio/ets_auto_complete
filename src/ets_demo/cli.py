@@ -504,15 +504,38 @@ async def fetch_real_homework(
     set_id = str(item.get("set_id", args.homework_id))
 
     progress("struct", message="fetching homework structure")
+    metadata: dict = {}
+    struct: dict = {}
     if kind in {"pk", "vocab"}:
         struct = await loop.run_in_executor(
             None, client.get_homework_struct, args.homework_id, resource_id, parent_id
         )
         questions = build_word_questions(struct)
         metadata = {"unit_id": 0, "book_id": 0}
+    elif kind == "mock":
+        # 听说模拟/考试作业：题目在列表项 struct/structs.contents 的加密 ZIP 里，
+        # g/homework/struct 对已完成/过期作业可能返回空题或报错。
+        struct_sources = [s for s in (item.get("structs") or []) if isinstance(s, dict)]
+        if not struct_sources and isinstance(item.get("struct"), dict):
+            struct_sources = [item["struct"]]
+        contents = []
+        for source in struct_sources:
+            contents.extend(source.get("contents", []) or [])
+            if not source.get("contents") and source.get("zip_url"):
+                contents.append({"group_name": source.get("group_name", "默认"), "url": source["zip_url"]})
+        questions = parse_homework_struct(
+            {"contents": contents},
+            downloader=client._default_download,
+        )
+        struct = {"total_point": float(item.get("total_point", 0) or 0)}
+        if not contents and not questions:
+            # 列表无 contents 时兜底：尝试 g/homework/struct
+            struct = await loop.run_in_executor(
+                None, client.get_homework_struct, args.homework_id, resource_id, parent_id
+            )
+            questions = parse_homework_struct(struct, downloader=client._default_download)
     else:
         questions = await run_question_download(client, args.homework_id, resource_id, parent_id)
-        metadata: dict = {}
 
     if kind == "composition":
         info = await loop.run_in_executor(
@@ -536,21 +559,21 @@ async def fetch_real_homework(
 
     if kind == "mock":
         combo = ""
-        fallback_exam = False
         if not questions:
             try:
                 exam_body = await loop.run_in_executor(
                     None, client.exam_struct, set_id, resource_id, parent_id
                 )
-                struct = exam_body
-                content = exam_body.get("content", []) if isinstance(exam_body, dict) else []
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, dict) and c.get("combination_id"):
-                            combo = str(c.get("combination_id", ""))
-                            break
+                if isinstance(exam_body, dict):
+                    struct = exam_body
+                    content = exam_body.get("content", []) if isinstance(exam_body, dict) else []
+                    if isinstance(content, list):
+                        for c in content:
+                            if isinstance(c, dict) and c.get("combination_id"):
+                                combo = str(c.get("combination_id", ""))
+                                break
             except Exception:
-                fallback_exam = True
+                pass
         if combo:
             metadata["combination_id"] = combo
 
