@@ -45,7 +45,7 @@ python release.py
 
 ```text
 欢迎横幅
- → 检测已保存账号/配置（~/.ets_demo/config.local.json、session.json）
+ → 检测已保存账号/配置（项目根目录 config.local.json、session.json）
  → 自动登录（含设备重绑处理）
  → 解析父账号 parent_id
  → 选择作业分类（待完成 / 已完成 / 已过期）
@@ -75,7 +75,7 @@ ets-demo ets-do <homework_id>           # 自动完成一份作业
 ets-demo ets-setup                      # 交互式登录 + 选择作业
 ```
 
-登录凭据保存在 `~/.ets_demo/session.json`，权限为 `0600`。
+登录凭据保存在项目根目录 `session.json`，权限为 `0600`。
 
 ## 真实 ETS 平台
 
@@ -84,8 +84,9 @@ ets-demo ets-setup                      # 交互式登录 + 选择作业
 `ETS_SN`/`ETS_SYSTEM`/`ETS_VERSION`/`ETS_CLIENT_VERSION`）与官方客户端一致且已
 写死在 `EtsConfig.from_env()` 中，**不再需要任何环境变量**。
 
-所有可选的敏感配置统一从本地配置文件 `~/.ets_demo/config.local.json` 读取
-（对应原 PHP 的 `config.local.php`，含真实密钥，不上 Git），字段与 PHP 一致。
+所有可选的敏感配置统一从项目根目录的 `config.local.json` 读取
+（对应原 PHP 的 `config.local.php`，含真实密钥，已加入 `.gitignore` 不上 Git），
+字段与 PHP 一致。
 参考模板见仓库根目录 `config.local.json.example`：
 
 ```json
@@ -153,7 +154,7 @@ ets-demo ets-do 12345 --voice-mode clone --clone-reference ref.wav
 ets-demo ets-do 12345 --evaluator ise                  # 真实 ISE 评测
 ```
 
-会话（`~/.ets_demo/session.json`）保存 token、设备码与 Base64 密码。token 失效
+会话（项目根目录 `session.json`）保存 token、设备码与 Base64 密码。token 失效
 时若配置了 `ETS_PHONE`/`ETS_PASS`，客户端会自动重新登录并重试。
 
 `ets-login` / `ets-list` / `ets-do` 还支持 `--token-file` 指向其他会话文件。

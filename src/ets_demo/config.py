@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .errors import ConfigError
 
-LOCAL_CONFIG_FILE = Path.home() / ".ets_demo" / "config.local.json"
+LOCAL_CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "config.local.json"
 
 
 def _load_local() -> dict[str, Any]:

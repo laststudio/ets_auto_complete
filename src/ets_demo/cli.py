@@ -158,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     ets_login = commands.add_parser("ets-login", help="Log in to the real ETS platform")
     ets_login.add_argument("phone")
     ets_login.add_argument("password")
-    ets_login.add_argument("--token-file", type=Path, help="Session file to save (default ~/.ets_demo/session.json)")
+    ets_login.add_argument("--token-file", type=Path, help="Session file to save (default ./session.json)")
 
     ets_setup = commands.add_parser(
         "ets-setup",
@@ -210,6 +210,10 @@ def _add_score_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fluency", type=float, default=4.95)
     parser.add_argument("--integrity", type=float, default=4.95)
     parser.add_argument("--stress", type=float, default=4.90)
+    parser.add_argument(
+        "--use-time", type=int, default=None,
+        help="Override total completion time in seconds (default: per-question recommended total)",
+    )
 
 
 def _ets_login(args: argparse.Namespace) -> int:
@@ -512,9 +516,10 @@ async def fetch_real_homework(
         )
         questions = build_word_questions(struct)
         metadata = {"unit_id": 0, "book_id": 0}
-    elif kind == "mock":
-        # 听说模拟/考试作业：题目在列表项 struct/structs.contents 的加密 ZIP 里，
+    elif kind in {"mock", "normal"}:
+        # 听说/模拟/考试作业：题目在列表项 struct/structs.contents 的加密 ZIP 里，
         # g/homework/struct 对已完成/过期作业可能返回空题或报错。
+        # 先尝试列表内嵌结构，失败再走 API。
         struct_sources = [s for s in (item.get("structs") or []) if isinstance(s, dict)]
         if not struct_sources and isinstance(item.get("struct"), dict):
             struct_sources = [item["struct"]]
@@ -750,6 +755,7 @@ async def _ets_do(args: argparse.Namespace, config: EtsConfig | None = None) -> 
             score_profile=_score_profile(args),
             per_question_scores=_load_overrides(args.score_overrides),
             target_total=args.target_total,
+            use_time=getattr(args, "use_time", None),
             ets_client=client,
             parent_account_id=parent_id,
             upload=upload_fn,

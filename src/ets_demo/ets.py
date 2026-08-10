@@ -22,7 +22,7 @@ from .interface import build_signed_payload, decode_response_body
 
 JsonObject = dict[str, Any]
 
-DEFAULT_SESSION_FILE = Path.home() / ".ets_demo" / "session.json"
+DEFAULT_SESSION_FILE = Path(__file__).resolve().parent.parent.parent / "session.json"
 ZIP_CDN_PREFIX = "https://cdn.subject.ets100.com/made/"
 
 
@@ -130,7 +130,11 @@ def classify_homework(item: JsonObject) -> str:
         return "vocab"
     if any(k in name for k in ("作文", "写作", "writing")):
         return "composition"
-    if any(k in name for k in ("模拟", "测试", "考试", "期中", "期末", "月考")):
+    # 真正走 m/exam 流程的听说模拟/考试以 mock 字段为准（=1），
+    # 名字含"模拟/考试"但 mock=0 的组卷练习/套题按普通听说作业处理。
+    if str(item.get("mock", "0")) == "1":
+        return "mock"
+    if str(item.get("exam", "0")) == "1":
         return "mock"
     if any(k in name for k in ("配音", "dub", "视频")):
         return "dubbing"

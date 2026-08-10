@@ -47,6 +47,7 @@ class WorkflowOptions:
     score_profile: ScoreProfile = field(default_factory=ScoreProfile)
     per_question_scores: dict[int, ScoreProfile] = field(default_factory=dict)
     target_total: float | None = None
+    use_time: int | None = None
     session_id: str = "local-session"
     send_interface: bool = False
     ets_client: EtsClient | None = None
@@ -75,6 +76,18 @@ def question_use_time(question: Question) -> int:
     if question.structure_type in {"collector.picture", "collector.repeat_essay"}:
         return 12
     return 10
+
+
+def recommended_use_time(homework: Homework) -> int:
+    """推荐完成用时（秒）：按题目类型累加，并给不同作业类型一个合理下限。"""
+    base = sum(question_use_time(item) for item in homework.questions)
+    if homework.kind == "mock":
+        return max(base, 180)
+    if homework.kind in {"pk", "vocab"}:
+        return max(base, 30)
+    if homework.kind == "composition":
+        return max(base, 300)
+    return max(base, 60)
 
 
 class StudyWorkflow:
@@ -124,6 +137,12 @@ class StudyWorkflow:
         if homework.kind == "composition":
             return await self._run_composition(homework)
         return await self._run_audio(homework)
+
+    def _resolved_use_time(self, homework: Homework, per_question: int, total: int) -> int:
+        """返回最终整份作业用时：自定义 > 推荐。"""
+        if self.options.use_time is not None and self.options.use_time > 0:
+            return int(self.options.use_time)
+        return recommended_use_time(homework)
 
     async def _run_audio(self, homework: Homework) -> dict:
         output_dir = self.options.output_dir
@@ -282,10 +301,8 @@ class StudyWorkflow:
                 )
             )
 
-        score = round(sum(item.awarded for item in results), 2)
-        if self.options.target_total is not None:
-            score = max(0.0, min(homework.total_point, self.options.target_total))
-        score_rate = int(round(score / homework.total_point * 1_000_000)) if homework.total_point else 0
+        total_use_time = self._resolved_use_time(homework, use_time, total_use_time)
+
         set_time_response = {}
         report_response = {}
         exam_sync_response = {}
@@ -307,6 +324,29 @@ class StudyWorkflow:
                                 combination_id = str(content.get("combination_id", ""))
                                 break
             if not combination_id:
+                if self._is_real:
+                    print(
+                        "无法获取该考试的 combination_id（m/exam/struct 返回 40020："
+                        "考试已完成或已过期，服务器拒绝重新提交）。跳过上传，仅保存本地结果。"
+                    )
+                    report = self._build_report(
+                        homework,
+                        results,
+                        total_use_time,
+                        start_response,
+                        ppr_response,
+                        {},
+                        {},
+                        {},
+                        {},
+                    )
+                    report_path = self.options.output_dir / "report.json"
+                    report_path.write_text(
+                        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+                    report["report_path"] = str(report_path.resolve())
+                    self.progress("complete", 100, "[8/8] local workflow completed")
+                    return report
                 combination_id = "local-combination"
             detail = [
                 {
@@ -339,6 +379,10 @@ class StudyWorkflow:
                 },
             )
         elif self._should_send:
+            score = round(sum(item.awarded for item in results), 2)
+            if self.options.target_total is not None:
+                score = max(0.0, min(homework.total_point, self.options.target_total))
+            score_rate = int(round(score / homework.total_point * 1_000_000)) if homework.total_point else 0
             set_time_params: dict = {
                 "homework_id": homework.id,
                 "resource_id": homework.resource_id,
@@ -365,7 +409,40 @@ class StudyWorkflow:
             set_time_response = self._call("set_use_time", set_time_params)
             report_response = self._call("report_score", report_params)
 
-        report = {
+        report = self._build_report(
+            homework,
+            results,
+            total_use_time,
+            start_response,
+            ppr_response,
+            set_time_response,
+            report_response,
+            exam_sync_response,
+            exam_submit_response,
+        )
+        report_path = output_dir / "report.json"
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        report["report_path"] = str(report_path.resolve())
+        self.progress("complete", 100, "[8/8] local workflow completed")
+        return report
+
+    def _build_report(
+        self,
+        homework: Homework,
+        results: list[QuestionResult],
+        total_use_time: int,
+        start_response: dict,
+        ppr_response: dict,
+        set_time_response: dict,
+        report_response: dict,
+        exam_sync_response: dict,
+        exam_submit_response: dict,
+    ) -> dict:
+        score = round(sum(item.awarded for item in results), 2)
+        if self.options.target_total is not None:
+            score = max(0.0, min(homework.total_point, self.options.target_total))
+        score_rate = int(round(score / homework.total_point * 1_000_000)) if homework.total_point else 0
+        return {
             "homework": homework.to_dict(),
             "summary": {
                 "score": score,
@@ -389,11 +466,6 @@ class StudyWorkflow:
             "results": [asdict(item) for item in results],
             "created_at": int(time.time()),
         }
-        report_path = output_dir / "report.json"
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        report["report_path"] = str(report_path.resolve())
-        self.progress("complete", 100, "[8/8] local workflow completed")
-        return report
 
     async def _run_pk(self, homework: Homework) -> dict:
         output_dir = self.options.output_dir
@@ -407,7 +479,7 @@ class StudyWorkflow:
         target_percent = max(0.0, min(100.0, target_percent))
         correct_count = round(len(homework.questions) * target_percent / 100.0)
         correct_indexes = set(range(correct_count))
-        use_time = max(10, len(homework.questions) * 3)
+        use_time = self._resolved_use_time(homework, len(homework.questions) * 3, max(10, len(homework.questions) * 3))
 
         steps: dict[str, dict] = {}
         if self._should_send:
@@ -576,12 +648,15 @@ class StudyWorkflow:
 
         steps: dict[str, dict] = {}
         if self._should_send:
+            composition_time = self._resolved_use_time(
+                homework, max(30, len(details) * 60), max(30, len(details) * 60)
+            )
             steps["save_draft"] = self._call(
                 "save_composition_draft",
                 {
                     "resource_id": homework.resource_id,
                     "homework_id": homework.id,
-                    "use_time": max(30, len(details) * 60),
+                    "use_time": composition_time,
                     "detail": [
                         {
                             "composition_id": item["composition_id"],
@@ -617,7 +692,7 @@ class StudyWorkflow:
                     "homework_id": homework.id,
                     "resource_id": homework.resource_id,
                     "seq_id": uuid.uuid4().hex,
-                    "use_time": max(30, len(details) * 60),
+                    "use_time": composition_time,
                 },
             )
 

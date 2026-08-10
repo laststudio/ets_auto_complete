@@ -45,13 +45,19 @@ def _bootstrap() -> None:
 
 
 def _saved_session() -> dict:
-    try:
-        from ets_demo.ets import EtsSession, decode_password
+    """优先读取 config.local.json 里的 ETS_PHONE/ETS_PASS，其次 session.json。"""
+    from ets_demo.config import _env
+    from ets_demo.ets import EtsSession, decode_password
 
+    phone = _env("ETS_PHONE", "").strip()
+    password = _env("ETS_PASS", "").strip()
+    if phone and password:
+        return {"phone": phone, "password": password, "source": "config"}
+    try:
         session = EtsSession.load()
         password = decode_password(session.password_enc)
         if session.phone and password:
-            return {"phone": session.phone, "password": password}
+            return {"phone": session.phone, "password": password, "source": "session"}
     except Exception:
         pass
     return {}
@@ -60,6 +66,9 @@ def _saved_session() -> dict:
 def _gather_credentials(saved: dict) -> tuple[str, str]:
     import getpass
 
+    if saved.get("source") == "config":
+        print(f"使用配置账号 {saved['phone']}（config.local.json）")
+        return saved["phone"], saved["password"]
     if saved:
         answer = input(f"检测到已保存账号 {saved['phone']}，直接使用？(y/n) [y]: ").strip().lower()
         if answer in ("", "y", "yes"):
@@ -195,7 +204,7 @@ def _voice_choice(config) -> tuple[str, str | None]:
             CloneTtsConfig.from_env().validate()
         except Exception as exc:
             print(f"克隆 TTS 未配置：{exc}")
-            print("提示：在 ~/.ets_demo/config.local.json 中配置 CLONE_TTS_URL / CLONE_TTS_RESULTS_URL / CLONE_TTS_API_KEY，")
+            print("提示：在项目 config.local.json 中配置 CLONE_TTS_URL / CLONE_TTS_RESULTS_URL / CLONE_TTS_API_KEY，")
             print("      并用 ETS_CLONE_REFERENCE 指定参考音频路径后重试。")
             print("回退到 edge 语音。")
             return "edge", None
@@ -206,6 +215,121 @@ def _voice_choice(config) -> tuple[str, str | None]:
     return mode, reference or None
 
 
+def _score_values() -> dict:
+    """从 config.local.json 读取自定义分数（默认满分 5.0，各维度接近满分）。"""
+    from ets_demo.config import _env
+
+    def f(key: str, default: float) -> float:
+        try:
+            return float(_env(key, str(default)))
+        except ValueError:
+            return default
+
+    def i(key: str, default: int) -> int:
+        try:
+            return int(float(_env(key, str(default))))
+        except ValueError:
+            return default
+
+    return {
+        "score": f("ETS_SCORE", 5.0),
+        "accuracy": f("ETS_SCORE_ACCURACY", 4.95),
+        "fluency": f("ETS_SCORE_FLUENCY", 4.95),
+        "integrity": f("ETS_SCORE_INTEGRITY", 4.95),
+        "stress": f("ETS_SCORE_STRESS", 4.90),
+        "target_total": f("ETS_TARGET_TOTAL", -1.0),
+        "use_time": i("ETS_USE_TIME", 0),
+    }
+
+
+def _view_score(client, item: dict, parent_id: str = "") -> None:
+    """查询并格式化打印一份作业的分数/进度。"""
+    import json as _json_mod
+
+    homework_id = str(item.get("id", ""))
+    resource_id = str(item.get("resource_id", ""))
+    print()
+    print(f"作业：{item.get('name', '')} ({homework_id})")
+    try:
+        info = client.get_homework_info(homework_id, resource_id, parent_id)
+    except Exception as exc:
+        print(f"查询失败: {exc}")
+        return
+    if not isinstance(info, dict):
+        print("服务器无返回。")
+        return
+
+    total_point = float(item.get("total_point", 0) or 0)
+    point = float(info.get("point", 0) or 0)
+    status = str(item.get("status", "0"))
+    status_text = {"0": "未完成", "1": "已完成", "2": "已过期", "4": "待重交", "5": "历史"}.get(status, status)
+    print(f"状态：{status_text}   得分：{point:.2f}/{total_point:.2f}")
+    complete = info.get("complete")
+    if complete in (None, ""):
+        complete = item.get("complete")
+    if complete not in (None, ""):
+        print(f"完成度：{complete}%")
+    if total_point > 0 and point > 0:
+        print(f"得分率：{point / total_point * 100:.1f}%")
+    else:
+        avg = item.get("avg_point") if item.get("avg_point") not in (None, "") else info.get("avg_point")
+        if avg not in (None, ""):
+            try:
+                avg_value = float(avg)
+                avg_pct = avg_value / 100.0 if avg_value > 100 else avg_value
+                print(f"得分率：{avg_pct:.1f}%")
+            except (TypeError, ValueError):
+                pass
+
+    scores = info.get("score") or []
+    if isinstance(scores, list) and scores:
+        print(f"答题明细（{len(scores)} 题）：")
+        for i, s in enumerate(scores, start=1):
+            real = s.get("real_score")
+            detail_raw = s.get("detail") or ""
+            dims = ""
+            if detail_raw:
+                try:
+                    d = _json_mod.loads(detail_raw)
+                    dims = "  ".join(
+                        f"{k}={v}" for k, v in d.items()
+                        if k in ("accuracy_score", "fluency_score", "integrity_score", "standard_score")
+                    )
+                except ValueError:
+                    pass
+            audio = s.get("audio") or ""
+            audio_mark = " 有音频" if audio else ""
+            print(f"  {i:2d}. 得分={real}{audio_mark}  {dims}")
+    elif "last_complete" in info and isinstance(info["last_complete"], dict):
+        last = info["last_complete"]
+        submit_time = last.get("submit_time") or ""
+        last_point = last.get("point") or 0
+        last_complete = last.get("complete") or 0
+        print(f"最近一次：提交于 {submit_time or '未知'}  得分={last_point}  完成度={last_complete}%")
+    else:
+        print("暂无答题明细（可能尚未提交）。")
+
+
+def _pick_action(item: dict) -> str:
+    """针对单份作业的操作菜单，返回 do / score / skip。"""
+    name = str(item.get("name", ""))
+    hid = str(item.get("id", ""))
+    while True:
+        print()
+        print(f"{name} ({hid})")
+        print("  1. 自动完成")
+        print("  2. 查看分数/进度")
+        print("  回车 = 自动完成   s = 跳过")
+        choice = input("请选择: ").strip().lower()
+        if choice == "2":
+            return "score"
+        if choice in ("", "1"):
+            return "do"
+        if choice == "s":
+            return "skip"
+        print("无效输入")
+
+
 def _do_homework(config, item: dict, parent_id: str = "") -> None:
     import asyncio
     from ets_demo.cli import _ets_do
@@ -213,11 +337,17 @@ def _do_homework(config, item: dict, parent_id: str = "") -> None:
     import argparse
 
     voice_mode, clone_reference = _voice_choice(config)
+    scores = _score_values()
     homework_id = str(item.get("id", ""))
     resource_id = str(item.get("resource_id", ""))
     print()
     print(f"开始自动完成：{item.get('name', '')} ({homework_id})  语音={voice_mode}"
           + (f" 参考={clone_reference}" if clone_reference else ""))
+    print(f"评分：{scores['score']:.2f}（accuracy={scores['accuracy']:.2f} "
+          f"fluency={scores['fluency']:.2f} integrity={scores['integrity']:.2f} "
+          f"stress={scores['stress']:.2f}）"
+          + (f" 目标总分={scores['target_total']:.0f}" if scores["target_total"] > 0 else ""))
+    print(f"用时：{'自定义 ' + str(scores['use_time']) + ' 秒' if scores['use_time'] > 0 else '按推荐用时（未设置）'}")
     run_args = argparse.Namespace(
         command="ets-do",
         homework_id=homework_id,
@@ -232,13 +362,14 @@ def _do_homework(config, item: dict, parent_id: str = "") -> None:
         pitch="+0Hz",
         clone_reference=Path(clone_reference) if clone_reference else None,
         score_overrides=None,
-        target_total=None,
+        target_total=scores["target_total"] if scores["target_total"] > 0 else None,
+        use_time=scores["use_time"] if scores["use_time"] > 0 else None,
         no_upload=False,
-        score=5.0,
-        accuracy=4.95,
-        fluency=4.95,
-        integrity=4.95,
-        stress=4.90,
+        score=scores["score"],
+        accuracy=scores["accuracy"],
+        fluency=scores["fluency"],
+        integrity=scores["integrity"],
+        stress=scores["stress"],
     )
     asyncio.run(_ets_do(run_args, config=config))
 
@@ -270,11 +401,22 @@ def main() -> None:
     client = logged["client"]
     try:
         selected = _pick_homework(client, parent_id)
+        done = 0
         for item in selected:
+            action = _pick_action(item)
+            if action == "score":
+                _view_score(client, item, parent_id=parent_id)
+                again = input("  查看下一操作？(y/n) [y]: ").strip().lower()
+                if again in ("n", "no"):
+                    continue
+            elif action == "skip":
+                print(f"跳过 {item.get('name', '')}")
+                continue
             _do_homework(config, item, parent_id=parent_id)
-        if selected:
+            done += 1
+        if done:
             print()
-            print(f"完成，共处理 {len(selected)} 份作业。输出目录见 output/ets/")
+            print(f"完成，共处理 {done} 份作业。输出目录见 output/ets/")
     finally:
         client.close()
 
