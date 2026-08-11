@@ -42,6 +42,8 @@ class WorkflowOptions:
     pitch: str = "+0Hz"
     clone_reference: Path | None = None
     clone_config: CloneTtsConfig | None = None
+    chinese_tone: bool = False
+    noise: float = 0.0
     http_tts_config: HttpTtsConfig | None = None
     ise_config: IseConfig | None = None
     score_profile: ScoreProfile = field(default_factory=ScoreProfile)
@@ -198,6 +200,8 @@ class StudyWorkflow:
                         self.options.clone_reference,
                         generated,
                         self.options.clone_config,
+                        chinese_tone=self.options.chinese_tone,
+                        noise=self.options.noise,
                     )
                 elif self.options.voice_mode == "http":
                     if self.options.http_tts_config is None:

@@ -51,36 +51,93 @@ def _clone_speed(text: str) -> float:
     return 2.0
 
 
+CHINESE_TONE_DEFAULT_SPEED = 0.72
+CHINESE_TONE_DEFAULT_PITCH = "0.7"
+
+
+def chinese_tone_params(
+    speed: float | None,
+    pitch: str | None,
+    text: str,
+) -> tuple[float, str]:
+    """中式英语语调：放慢语速、轻微降调，制造每个词等重、语调平缓的效果。
+    中文母语者说英语的典型特征：语速比母语者慢、音调起伏小、节奏均匀。"""
+    if speed is None:
+        base = _clone_speed(text)
+        speed = max(base * 0.85, 0.7)
+    return speed, pitch or CHINESE_TONE_DEFAULT_PITCH
+def add_noise(source: Path, output: Path, *, strength: float = 0.15) -> None:
+    """用 ffmpeg 给音频混入低音量粉噪（更像环境底噪），降低清晰度。
+    strength 0-1：0.1≈几乎听不出，0.3≈轻微底噪，0.5≈明显环境音，0.8≈较重干扰。"""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise AudioError("ffmpeg is required but was not found")
+    if not (0 < strength < 1):
+        raise AudioError("noise strength must be between 0 and 1")
+    with tempfile.TemporaryDirectory(prefix="ets_noise_") as temp_dir:
+        mixed = Path(temp_dir) / "mixed.wav"
+        noise_db = int(-42 + strength * 26)
+        command = [
+            ffmpeg, "-nostdin", "-v", "error", "-y",
+            "-i", str(source),
+            "-f", "lavfi", "-i", "anoisesrc=colour=pink:amplitude=0.3",
+            "-filter_complex",
+            f"[1:a]volume={noise_db}dB,asetpts=PTS-STARTPTS[noise];"
+            f"[0:a][noise]amix=inputs=2:duration=shortest:normalize=0[out]",
+            "-map", "[out]", "-ar", "24000", "-ac", "1", "-b:a", "128k",
+            str(mixed),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, timeout=60)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            detail = getattr(exc, "stderr", b"")
+            message = detail.decode(errors="replace") if isinstance(detail, bytes) else str(detail)
+            raise AudioError(f"Noise processing failed: {message.strip()}") from exc
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(mixed.read_bytes())
+
+
+
 async def synthesize_clone(
     text: str,
     reference_audio: Path,
     output: Path,
     config: CloneTtsConfig,
     *,
-    model: str = "chatterbox",
+    model: str | None = None,
     speed: float | None = None,
+    forwarded_for: str | None = None,
+    chinese_tone: bool = False,
+    noise: float = 0.0,
 ) -> Path:
     config.validate()
     if not text.strip():
         raise AudioError("TTS text is empty")
     if not reference_audio.is_file():
         raise AudioError(f"Clone reference audio not found: {reference_audio}")
-    headers = {"Authorization": f"Bearer {config.api_key}"}
+    headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+    if forwarded_for:
+        headers["X-Forwarded-For"] = forwarded_for
+    send_speed, send_pitch = chinese_tone_params(speed, None, text) if chinese_tone else (
+        speed, None,
+    )
     try:
         timeout = aiohttp.ClientTimeout(total=config.timeout)
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as client:
             with reference_audio.open("rb") as source:
                 form = aiohttp.FormData()
                 form.add_field(
-                    "reference_audio",
+                    "file",
                     source,
                     filename=reference_audio.name,
                     content_type="application/octet-stream",
                 )
                 form.add_field("text", text)
-                form.add_field("model", model)
+                form.add_field("model", model or config.model)
                 form.add_field("format", "mp3")
-                form.add_field("speed", str(speed if speed is not None else _clone_speed(text)))
+                form.add_field("speed", str(send_speed if send_speed is not None else _clone_speed(text)))
+                if send_pitch:
+                    form.add_field("pitch", send_pitch)
                 response = await client.post(
                     config.submit_url,
                     data=form,
@@ -99,7 +156,11 @@ async def synthesize_clone(
                     audio = b""
                     while time.monotonic() < deadline:
                         await asyncio.sleep(config.poll_interval)
-                        async with client.get(config.results_url, params={"uuid": uuid}) as poll:
+                        async with client.get(
+                            config.results_url,
+                            params={"uuid": uuid},
+                            allow_redirects=True,
+                        ) as poll:
                             poll.raise_for_status()
                             poll_type = poll.headers.get("content-type", "").lower()
                             if poll_type.startswith("audio/") or "octet-stream" in poll_type:
@@ -112,18 +173,28 @@ async def synthesize_clone(
                             raise AudioError(f"Clone TTS failed: {status.get('error', 'unknown error')}")
                         if status.get("status") == "completed" and status.get("result_url"):
                             download_url = urljoin(config.results_url, str(status["result_url"]))
-                            async with client.get(download_url) as downloaded:
-                                downloaded.raise_for_status()
-                                audio = await downloaded.read()
+                            download_timeout = aiohttp.ClientTimeout(total=config.max_wait)
+                            async with aiohttp.ClientSession(
+                                timeout=download_timeout,
+                                headers=headers,
+                            ) as download_client:
+                                async with download_client.get(
+                                    download_url,
+                                    allow_redirects=True,
+                                ) as downloaded:
+                                    downloaded.raise_for_status()
+                                    audio = await downloaded.read()
                             break
                     if not audio:
                         raise AudioError("Clone TTS polling timed out")
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-        raise AudioError(f"Clone TTS request failed: {exc}") from exc
+        raise AudioError(f"Clone TTS request failed: {exc!r}") from exc
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(audio)
     normalize_mp3(output)
+    if noise > 0:
+        add_noise(output, output, strength=min(noise, 0.99))
     return output
 
 
@@ -177,6 +248,14 @@ async def synthesize_http(
             "only_audio": True,
             "json_config": json.dumps({"padding_bonus": 1.0, "temp": 0.0}),
         }
+    elif config.style == "ttsai":
+        payload = {
+            "model": config.model,
+            "text": text,
+            "voice": voice or config.voice,
+            "format": "mp3",
+            "speed": speed if speed is not None else config.speed,
+        }
     else:
         payload = {
             "model": config.model,
@@ -227,7 +306,9 @@ async def _poll_http_tts(
     deadline = time.monotonic() + config.max_wait
     while time.monotonic() < deadline:
         await asyncio.sleep(config.poll_interval)
-        async with client.get(config.results_url, params={"uuid": uuid}) as response:
+        async with client.get(
+            config.results_url, params={"uuid": uuid}, allow_redirects=True
+        ) as response:
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").lower()
             if content_type.startswith("audio/") or "octet-stream" in content_type:
@@ -239,9 +320,14 @@ async def _poll_http_tts(
             raise AudioError(f"HTTP TTS failed: {status.get('error', 'unknown error')}")
         if status.get("status") == "completed" and status.get("result_url"):
             url = urljoin(config.results_url, str(status["result_url"]))
-            async with client.get(url) as download:
-                download.raise_for_status()
-                return await download.read()
+            download_timeout = aiohttp.ClientTimeout(total=config.max_wait)
+            async with aiohttp.ClientSession(
+                timeout=download_timeout,
+                headers=client.headers,
+            ) as download_client:
+                async with download_client.get(url, allow_redirects=True) as download:
+                    download.raise_for_status()
+                    return await download.read()
     raise AudioError("HTTP TTS polling timed out")
 
 

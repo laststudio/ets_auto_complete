@@ -143,6 +143,7 @@ class CloneTtsConfig:
     submit_url: str
     results_url: str
     api_key: str
+    model: str = "pocket-tts"
     timeout: float = 30.0
     poll_interval: float = 2.0
     max_wait: float = 300.0
@@ -150,9 +151,10 @@ class CloneTtsConfig:
     @classmethod
     def from_env(cls) -> "CloneTtsConfig":
         return cls(
-            submit_url=_env("CLONE_TTS_URL"),
-            results_url=_env("CLONE_TTS_RESULTS_URL"),
+            submit_url=_env("CLONE_TTS_URL", "https://tts.ai/api/v1/voice-clone/"),
+            results_url=_env("CLONE_TTS_RESULTS_URL", "https://api.tts.ai/v1/speech/results/"),
             api_key=_env("CLONE_TTS_API_KEY"),
+            model=_env("CLONE_TTS_MODEL", "pocket-tts"),
             timeout=30.0,
             poll_interval=2.0,
             max_wait=300.0,
@@ -164,7 +166,6 @@ class CloneTtsConfig:
             for name, value in (
                 ("CLONE_TTS_URL", self.submit_url),
                 ("CLONE_TTS_RESULTS_URL", self.results_url),
-                ("CLONE_TTS_API_KEY", self.api_key),
             )
             if not value
         ]
@@ -192,12 +193,12 @@ class HttpTtsConfig:
     @classmethod
     def from_env(cls) -> "HttpTtsConfig":
         return cls(
-            url=_env("HTTP_TTS_URL"),
+            url=_env("HTTP_TTS_URL", "https://api.tts.ai/v1/tts/"),
             api_key=_env("HTTP_TTS_API_KEY"),
-            style="openai",
-            results_url=_env("HTTP_TTS_RESULTS_URL"),
-            model="kokoro",
-            voice="af_bella",
+            style=_env("HTTP_TTS_STYLE", "ttsai"),
+            results_url=_env("HTTP_TTS_RESULTS_URL", "https://api.tts.ai/v1/speech/results/"),
+            model=_env("HTTP_TTS_MODEL", "kokoro"),
+            voice=_env("HTTP_TTS_VOICE", "af_bella"),
             speed=1.0,
             timeout=120.0,
             poll_interval=1.0,
@@ -207,8 +208,8 @@ class HttpTtsConfig:
     def validate(self) -> None:
         if not self.url:
             raise ConfigError("HTTP_TTS_URL is required for HTTP TTS")
-        if self.style not in {"openai", "gradium"}:
-            raise ConfigError("HTTP_TTS_STYLE must be openai or gradium")
+        if self.style not in {"openai", "gradium", "ttsai"}:
+            raise ConfigError("HTTP_TTS_STYLE must be openai, gradium or ttsai")
         parsed = urlparse(self.url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ConfigError("HTTP_TTS_URL must be an http(s) URL")

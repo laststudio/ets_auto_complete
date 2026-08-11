@@ -204,7 +204,8 @@ def _voice_choice(config) -> tuple[str, str | None]:
             CloneTtsConfig.from_env().validate()
         except Exception as exc:
             print(f"克隆 TTS 未配置：{exc}")
-            print("提示：在项目 config.local.json 中配置 CLONE_TTS_URL / CLONE_TTS_RESULTS_URL / CLONE_TTS_API_KEY，")
+            print("提示：CLONE_TTS_URL 默认指向 tts.ai（https://tts.ai/api/v1/voice-clone/），")
+            print("      注册 https://tts.ai 后把 API Key 填入 config.local.json 的 CLONE_TTS_API_KEY（不填也可匿名使用），")
             print("      并用 ETS_CLONE_REFERENCE 指定参考音频路径后重试。")
             print("回退到 edge 语音。")
             return "edge", None
@@ -348,6 +349,11 @@ def _do_homework(config, item: dict, parent_id: str = "") -> None:
           f"stress={scores['stress']:.2f}）"
           + (f" 目标总分={scores['target_total']:.0f}" if scores["target_total"] > 0 else ""))
     print(f"用时：{'自定义 ' + str(scores['use_time']) + ' 秒' if scores['use_time'] > 0 else '按推荐用时（未设置）'}")
+    if voice_mode == "clone":
+        tone = _env("ETS_CHINESE_TONE", "").lower() in {"1", "true", "yes"}
+        noise = float(_env("ETS_NOISE", "0") or 0)
+        print(f"克隆音色：{'中式语调（慢速+降调）' if tone else '原声'}"
+              + (f"，噪点强度={noise}" if noise > 0 else ""))
     run_args = argparse.Namespace(
         command="ets-do",
         homework_id=homework_id,
