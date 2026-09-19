@@ -588,8 +588,8 @@ async def fetch_real_homework(
     total_point = float(struct.get("total_point", 0)) if isinstance(struct, dict) else 0
     if kind in {"pk", "vocab"}:
         total_point = 100.0
-    if total_point <= 0:
-        total_point = 30.0
+    elif total_point <= 0 or abs(total_point - 100.0) < 0.01:
+        total_point = 40.0 if "北京" in name else 30.0
 
     home = Homework(
         id=str(args.homework_id),
