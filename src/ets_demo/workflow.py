@@ -50,6 +50,7 @@ class WorkflowOptions:
     per_question_scores: dict[int, ScoreProfile] = field(default_factory=dict)
     target_total: float | None = None
     use_time: int | None = None
+    allow_over_max: bool = False
     session_id: str = "local-session"
     send_interface: bool = False
     ets_client: EtsClient | None = None
@@ -179,7 +180,9 @@ class StudyWorkflow:
         for index, question in enumerate(homework.questions):
             start = 10 + int(78 * index / max(1, len(homework.questions)))
             self.progress("question", start, f"[3-7] question {index + 1}/{len(homework.questions)}")
-            profile = self.options.per_question_scores.get(index, self.options.score_profile).clamped()
+            profile = self.options.per_question_scores.get(index, self.options.score_profile)
+            if not self.options.allow_over_max:
+                profile = profile.clamped()
             audio_path = ""
             xml_path = xml_dir / f"{index + 1:03d}_{question.entity_id}.xml"
 
@@ -189,6 +192,7 @@ class StudyWorkflow:
                     profile,
                     category="read_chapter",
                     seed=index,
+                    clamp=not self.options.allow_over_max,
                 )
             else:
                 generated = audio_dir / f"{index + 1:03d}_{question.entity_id}.mp3"
@@ -234,13 +238,19 @@ class StudyWorkflow:
                     ).clamped()
                 else:
                     xml = generate_score_xml(
-                        question.text, profile, category=question.category, seed=index
+                        question.text,
+                        profile,
+                        category=question.category,
+                        seed=index,
+                        clamp=not self.options.allow_over_max,
                     )
 
             xml_path.write_text(xml, encoding="utf-8")
             use_time = question_use_time(question)
             total_use_time += use_time
-            awarded = convert_score(profile.total, maximum_per_question)
+            awarded = convert_score(
+                profile.total, maximum_per_question, cap=not self.options.allow_over_max
+            )
             sync_response = {}
             if self._should_send and homework.kind != "mock":
                 upload_file_id = self._pre_upload_id()
@@ -273,6 +283,7 @@ class StudyWorkflow:
                         profile,
                         category=question.category,
                         choose=question.correct_option,
+                        clamp=not self.options.allow_over_max,
                     ),
                 }
                 if self._is_real:
@@ -385,7 +396,10 @@ class StudyWorkflow:
         elif self._should_send:
             score = round(sum(item.awarded for item in results), 2)
             if self.options.target_total is not None:
-                score = max(0.0, min(homework.total_point, self.options.target_total))
+                if self.options.allow_over_max:
+                    score = max(0.0, self.options.target_total)
+                else:
+                    score = max(0.0, min(homework.total_point, self.options.target_total))
             score_rate = int(round(score / homework.total_point * 1_000_000)) if homework.total_point else 0
             set_time_params: dict = {
                 "homework_id": homework.id,
@@ -444,7 +458,10 @@ class StudyWorkflow:
     ) -> dict:
         score = round(sum(item.awarded for item in results), 2)
         if self.options.target_total is not None:
-            score = max(0.0, min(homework.total_point, self.options.target_total))
+            if self.options.allow_over_max:
+                score = max(0.0, self.options.target_total)
+            else:
+                score = max(0.0, min(homework.total_point, self.options.target_total))
         score_rate = int(round(score / homework.total_point * 1_000_000)) if homework.total_point else 0
         return {
             "homework": homework.to_dict(),

@@ -119,3 +119,75 @@ def test_composition_branch(tmp_path: Path) -> None:
         "m/composition/mark",
         "m/homework/submit",
     ]
+
+
+def _normal_homework() -> Homework:
+    return Homework(
+        id="normal-1",
+        name="Normal",
+        total_point=30,
+        questions=[
+            Question(entity_id="q1", order=0, text="Hello", category="read_sentence"),
+            Question(entity_id="q2", order=1, text="World", category="read_sentence"),
+        ],
+    )
+
+
+def test_target_total_above_max_is_clamped_by_default(tmp_path: Path) -> None:
+    state = MockState(homeworks=[_normal_homework()], pid="branch-pid", secret="branch-secret")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        with InterfaceClient(
+            InterfaceConfig(
+                api_base_url=f"http://{host}:{port}", pid=state.pid, secret_key=state.secret
+            )
+        ) as client:
+            report = asyncio.run(
+                StudyWorkflow(
+                    WorkflowOptions(
+                        output_dir=tmp_path / "clamped",
+                        send_interface=True,
+                        target_total=10000,
+                    ),
+                    interface=client,
+                ).run(_normal_homework())
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert report["summary"]["score"] == 30.0
+
+
+def test_allow_over_max_keeps_large_target_total(tmp_path: Path) -> None:
+    state = MockState(homeworks=[_normal_homework()], pid="branch-pid", secret="branch-secret")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        with InterfaceClient(
+            InterfaceConfig(
+                api_base_url=f"http://{host}:{port}", pid=state.pid, secret_key=state.secret
+            )
+        ) as client:
+            report = asyncio.run(
+                StudyWorkflow(
+                    WorkflowOptions(
+                        output_dir=tmp_path / "over",
+                        send_interface=True,
+                        target_total=10000,
+                        allow_over_max=True,
+                    ),
+                    interface=client,
+                ).run(_normal_homework())
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert report["summary"]["score"] == 10000
+    assert report["summary"]["maximum"] == 30.0

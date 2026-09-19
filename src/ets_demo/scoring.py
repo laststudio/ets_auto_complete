@@ -27,13 +27,16 @@ class ScoreProfile:
         )
 
 
-def convert_score(score: float, maximum: float, graduation: float = 0.125) -> float:
+def convert_score(
+    score: float, maximum: float, graduation: float = 0.125, *, cap: bool = True
+) -> float:
     if maximum <= 0:
         return 0.0
     value = score * maximum / 5.0
     if graduation > 0:
         value = math.ceil((value - 1e-12) / graduation) * graduation
-    return round(min(maximum, value), 2)
+    value = round(value, 2)
+    return min(maximum, value) if cap else max(0.0, value)
 
 
 def build_score_detail(
@@ -43,8 +46,10 @@ def build_score_detail(
     choose: str = "",
     repeat_mode: bool = True,
     graduation: float = 0.125,
+    clamp: bool = True,
 ) -> str:
-    profile = profile.clamped()
+    if clamp:
+        profile = profile.clamped()
     return json.dumps(
         {
             "total_score": f"{profile.total:.2f}",
@@ -91,13 +96,19 @@ def generate_score_xml(
     *,
     category: str = "read_sentence",
     seed: int | None = None,
+    clamp: bool = True,
 ) -> str:
-    profile = profile.clamped()
+    if clamp:
+        profile = profile.clamped()
     randomizer = random.Random(seed)
     root = ET.Element("xml_result")
     category_name = category if category in {"read_sentence", "read_chapter", "talk_recite", "talk_free"} else "read_chapter"
     category_node = ET.SubElement(root, category_name)
-    standard = max(0.0, min(5.0, profile.total + randomizer.uniform(-0.1, 0.1)))
+
+    def _bounded(value: float) -> float:
+        return max(0.0, min(5.0, value)) if clamp else max(0.0, value)
+
+    standard = _bounded(profile.total + randomizer.uniform(-0.1, 0.1))
     paper = ET.SubElement(
         category_node,
         "rec_paper",
@@ -115,14 +126,14 @@ def generate_score_xml(
     )
     sentences = [part.strip() for part in re.split(r"[.!?]+", text) if part.strip()] or [text]
     for sentence_text in sentences:
-        sentence_score = max(0.0, min(5.0, profile.total + randomizer.uniform(-0.15, 0.15)))
+        sentence_score = _bounded(profile.total + randomizer.uniform(-0.15, 0.15))
         sentence = ET.SubElement(
             paper,
             "sentence",
             {"content": sentence_text, "total_score": f"{sentence_score:.2f}"},
         )
         for word_text in sentence_text.split():
-            word_score = max(0.0, min(5.0, sentence_score + randomizer.uniform(-0.3, 0.3)))
+            word_score = _bounded(sentence_score + randomizer.uniform(-0.3, 0.3))
             word = ET.SubElement(
                 sentence,
                 "word",

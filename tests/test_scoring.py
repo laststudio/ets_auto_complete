@@ -16,3 +16,8 @@ def test_score_detail_and_conversion() -> None:
     detail = build_score_detail(profile, category="read_sentence", choose="B")
     assert '"choose":"B"' in detail
     assert convert_score(4.0, 10.0) == 8.0
+
+
+def test_convert_score_without_cap_allows_over_max() -> None:
+    assert convert_score(6.0, 10.0) == 10.0
+    assert convert_score(6.0, 10.0, cap=False) == 12.0

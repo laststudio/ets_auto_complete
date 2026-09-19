@@ -38,14 +38,15 @@ def _json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
-def _score_profile(args: argparse.Namespace) -> ScoreProfile:
-    return ScoreProfile(
+def _score_profile(args: argparse.Namespace, *, clamp: bool = True) -> ScoreProfile:
+    profile = ScoreProfile(
         total=args.score,
         accuracy=args.accuracy,
         fluency=args.fluency,
         integrity=args.integrity,
         stress=args.stress,
-    ).clamped()
+    )
+    return profile.clamped() if clamp else profile
 
 
 def _load_overrides(path: Path | None) -> dict[int, ScoreProfile]:
@@ -726,7 +727,13 @@ async def _run_async(args: argparse.Namespace) -> int:
     raise DemoError(f"Unsupported asynchronous command: {args.command}")
 
 
-async def _ets_do(args: argparse.Namespace, config: EtsConfig | None = None) -> int:
+async def _ets_do(
+    args: argparse.Namespace,
+    config: EtsConfig | None = None,
+    homework: Homework | None = None,
+    per_question_scores: dict[int, ScoreProfile] | None = None,
+    allow_over_max: bool = False,
+) -> int:
     config = config or EtsConfig.from_env()
     with EtsClient(config) as client:
         session = EtsSession.load(args.token_file)
@@ -736,8 +743,9 @@ async def _ets_do(args: argparse.Namespace, config: EtsConfig | None = None) -> 
         parent_id = args.parent_id or client.resolve_parent_id()
         client.parent_id = parent_id
 
-        g = _ets_progress()
-        homework = await fetch_real_homework(client, args, parent_id, g)
+        if homework is None:
+            g = _ets_progress()
+            homework = await fetch_real_homework(client, args, parent_id, g)
 
         uploader = None
         upload_fn = None
@@ -758,10 +766,15 @@ async def _ets_do(args: argparse.Namespace, config: EtsConfig | None = None) -> 
             noise=float(_env("ETS_NOISE", "0") or 0),
             http_tts_config=HttpTtsConfig.from_env() if args.voice_mode == "http" else None,
             ise_config=IseConfig.from_env() if args.evaluator == "ise" else None,
-            score_profile=_score_profile(args),
-            per_question_scores=_load_overrides(args.score_overrides),
+            score_profile=_score_profile(args, clamp=not allow_over_max),
+            per_question_scores=(
+                per_question_scores
+                if per_question_scores is not None
+                else _load_overrides(args.score_overrides)
+            ),
             target_total=args.target_total,
             use_time=getattr(args, "use_time", None),
+            allow_over_max=allow_over_max,
             ets_client=client,
             parent_account_id=parent_id,
             upload=upload_fn,

@@ -243,6 +243,185 @@ def _score_values() -> dict:
     }
 
 
+_CATEGORY_LABELS = {
+    "read_sentence": "朗读",
+    "read_chapter": "篇章朗读",
+    "choose": "选择",
+    "role": "角色扮演",
+    "repeat": "跟读",
+    "fill": "填空",
+    "picture": "看图说话",
+    "composition": "作文",
+    "word_question": "单词",
+}
+
+
+def _category_label(category: str) -> str:
+    return _CATEGORY_LABELS.get(category, category or "题目")
+
+
+def _print_homework_preview(homework) -> None:
+    """打印作业总分、题型分布和题目列表。"""
+    from collections import Counter
+
+    labels = Counter(_category_label(q.category) for q in homework.questions)
+    print()
+    print("─" * 56)
+    print(f"作业：{homework.name}")
+    print(f"总分：{homework.total_point:.2f}    题目数：{len(homework.questions)}")
+    print("题型：" + "  ".join(f"{name}×{count}" for name, count in labels.items()))
+    print("─" * 56)
+    print("题目列表：")
+    for index, question in enumerate(homework.questions, start=1):
+        label = _category_label(question.category)
+        text = (question.text or "").strip().replace("\n", " ")
+        if len(text) > 48:
+            text = text[:48] + "..."
+        if question.category == "choose" and text:
+            text = f"答案：{text}"
+        elif not text:
+            text = "（无文本，音频题）"
+        extra = f"  选项×{len(question.options)}" if question.options else ""
+        print(f"  {index:2d}. [{label}] {text}{extra}")
+    print("─" * 56)
+
+
+MAX_FIELD_SCORE = 5.0
+
+
+def _prompt_float(label: str, default: float, *, maximum: float | None = None) -> float:
+    """读取浮点输入；超过 maximum 时仅提示，不强制限制。"""
+    while True:
+        raw = input(f"  {label} [{default:g}]: ").strip()
+        if not raw:
+            value = default
+        else:
+            try:
+                value = float(raw)
+            except ValueError:
+                print("    请输入数字。")
+                continue
+        if value < 0:
+            print("    分数不能为负，请重新输入。")
+            continue
+        if maximum is not None and value > maximum:
+            print(
+                f"    ⚠ 当前分数 {value:g} 超过单项满分 {maximum:g}，"
+                "将按原样提交，可能被平台拒绝。"
+            )
+        return value
+
+
+def _prompt_int(label: str, default: int) -> int:
+    while True:
+        raw = input(f"  {label} [{default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            return max(0, int(float(raw)))
+        except ValueError:
+            print("    请输入整数。")
+
+
+def _profile_from(value: float, base: dict) -> dict:
+    """以统一维度为基础，用 value 作为总分维度，构造逐题配置。"""
+    return {
+        "score": value,
+        "accuracy": base["accuracy"],
+        "fluency": base["fluency"],
+        "integrity": base["integrity"],
+        "stress": base["stress"],
+    }
+
+
+def _short_text(question, limit: int = 34) -> str:
+    text = (question.text or "").strip().replace("\n", " ")
+    if question.category == "choose" and text:
+        text = f"答案 {text}"
+    if not text:
+        text = "（音频题）"
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _configure_scoring(homework, defaults: dict) -> dict:
+    """展示评分菜单：统一分 / 满分 / 逐题，并可覆盖最终总分。"""
+    base = dict(defaults)
+    print()
+    print("─" * 56)
+    print("  评分设置")
+    print("─" * 56)
+    print(f"  1. 配置文件统一分数（总分={base['score']:.2f}，各维度≈4.95）")
+    print("  2. 全部满分（总分=5.0）")
+    if homework is not None and homework.questions:
+        print(f"  3. 逐题设置分数（共 {len(homework.questions)} 题，0-5，可超限）")
+    else:
+        print("  3. 逐题设置分数（无题目信息，不可用）")
+    print("  回车 = 1")
+    choice = input("请选择 [1]: ").strip() or "1"
+
+    per_question: dict[int, dict] = {}
+    uniform = base
+
+    if choice == "2":
+        uniform = {
+            "score": MAX_FIELD_SCORE,
+            "accuracy": MAX_FIELD_SCORE,
+            "fluency": MAX_FIELD_SCORE,
+            "integrity": MAX_FIELD_SCORE,
+            "stress": MAX_FIELD_SCORE,
+        }
+        print(f"  已选择全部满分：总分={MAX_FIELD_SCORE:.2f}")
+    elif choice == "3" and homework is not None and homework.questions:
+        maximum_per_question = homework.total_point / len(homework.questions)
+        print()
+        print("  逐题评分：直接回车=沿用统一分，可输入 0-5 或更大值。")
+        print(f"  本题满分≈{maximum_per_question:.2f} 分（仅作参考，可超出）")
+        for index, question in enumerate(homework.questions):
+            label = _category_label(question.category)
+            print(f"  {index + 1:2d}. [{label}] {_short_text(question)}")
+            value = _prompt_float("      本题分数 (0-5)", base["score"], maximum=MAX_FIELD_SCORE)
+            per_question[index] = _profile_from(value, base)
+        uniform = base
+    else:
+        print(f"  使用配置统一分数：总分={base['score']:.2f}")
+
+    print()
+    print("─" * 56)
+    print("  最终总分（云端）")
+    print("─" * 56)
+    print("  可覆盖各题汇总，允许超过作业满分。例：输入 10000 尝试提交 10000 分。")
+    default_total = base["target_total"] if base["target_total"] > 0 else 0.0
+    total = _prompt_float("总分（0=按各题汇总）", default_total)
+    target_total = total if total > 0 else None
+    allow_over_max = total > 0 or any(
+        p["score"] > MAX_FIELD_SCORE for p in per_question.values()
+    ) or uniform["score"] > MAX_FIELD_SCORE
+    if target_total is not None and homework is not None and target_total > homework.total_point:
+        print(
+            f"    ⚠ 总分 {target_total:.2f} 超过作业满分 {homework.total_point:.2f}，"
+            "将按原样提交，可能被平台拒绝。"
+        )
+
+    use_time = _prompt_int("完成用时秒（0=推荐用时）", base["use_time"])
+
+    return {
+        "profile": uniform,
+        "per_question": per_question,
+        "target_total": target_total,
+        "use_time": use_time,
+        "allow_over_max": allow_over_max,
+    }
+
+
+async def _fetch_homework_preview(client, homework_id: str, resource_id: str, parent_id: str):
+    """拉取作业结构用于预览，失败返回 None。"""
+    import argparse
+    from ets_demo.cli import fetch_real_homework, _ets_progress
+
+    stub = argparse.Namespace(homework_id=homework_id, resource_id=resource_id)
+    return await fetch_real_homework(client, stub, parent_id, _ets_progress())
+
+
 def _view_score(client, item: dict, parent_id: str = "") -> None:
     """查询并格式化打印一份作业的分数/进度。"""
     import json as _json_mod
@@ -331,29 +510,74 @@ def _pick_action(item: dict) -> str:
         print("无效输入")
 
 
-def _do_homework(config, item: dict, parent_id: str = "") -> None:
+def _do_homework(config, client, item: dict, parent_id: str = "") -> None:
     import asyncio
-    from ets_demo.cli import _ets_do
-    from ets_demo.ets import EtsSession
     import argparse
+    from ets_demo.cli import _ets_do
+    from ets_demo.config import _env
 
     voice_mode, clone_reference = _voice_choice(config)
-    scores = _score_values()
+    defaults = _score_values()
     homework_id = str(item.get("id", ""))
     resource_id = str(item.get("resource_id", ""))
+
     print()
-    print(f"开始自动完成：{item.get('name', '')} ({homework_id})  语音={voice_mode}"
-          + (f" 参考={clone_reference}" if clone_reference else ""))
-    print(f"评分：{scores['score']:.2f}（accuracy={scores['accuracy']:.2f} "
+    print(f"正在读取作业内容：{item.get('name', '')} ({homework_id}) ...")
+    homework = None
+    try:
+        homework = asyncio.run(
+            _fetch_homework_preview(client, homework_id, resource_id, parent_id)
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"无法预览题目（{exc}），将直接开始。")
+    if homework is not None:
+        _print_homework_preview(homework)
+    else:
+        total_point = float(item.get("total_point", 0) or 0)
+        if total_point > 0:
+            print(f"总分：{total_point:.2f}")
+
+    scoring = _configure_scoring(homework, defaults)
+    scores = scoring["profile"]
+    from ets_demo.scoring import ScoreProfile
+
+    per_question = {
+        index: ScoreProfile(
+            total=profile["score"],
+            accuracy=profile["accuracy"],
+            fluency=profile["fluency"],
+            integrity=profile["integrity"],
+            stress=profile["stress"],
+        )
+        for index, profile in scoring["per_question"].items()
+    }
+
+    print()
+    print("─" * 56)
+    print("  开始自动完成")
+    print("─" * 56)
+    print(f"  作业：{item.get('name', '')} ({homework_id})")
+    print(f"  语音：{voice_mode}" + (f"  参考={clone_reference}" if clone_reference else ""))
+    score_note = (
+        f"逐题设置（{len(per_question)} 题）"
+        if per_question
+        else f"统一总分={scores['score']:.2f}"
+    )
+    print(f"  评分：{score_note}（accuracy={scores['accuracy']:.2f} "
           f"fluency={scores['fluency']:.2f} integrity={scores['integrity']:.2f} "
-          f"stress={scores['stress']:.2f}）"
-          + (f" 目标总分={scores['target_total']:.0f}" if scores["target_total"] > 0 else ""))
-    print(f"用时：{'自定义 ' + str(scores['use_time']) + ' 秒' if scores['use_time'] > 0 else '按推荐用时（未设置）'}")
+          f"stress={scores['stress']:.2f}）")
+    if scoring["target_total"] is not None:
+        print(f"  最终总分：{scoring['target_total']:.2f}"
+              + ("  ⚠ 超出作业满分" if scoring["allow_over_max"] else ""))
+    else:
+        print("  最终总分：按各题汇总")
+    print(f"  用时：{'自定义 ' + str(scores['use_time']) + ' 秒' if scoring['use_time'] > 0 else '按推荐用时（未设置）'}")
     if voice_mode == "clone":
         tone = _env("ETS_CHINESE_TONE", "").lower() in {"1", "true", "yes"}
         noise = float(_env("ETS_NOISE", "0") or 0)
-        print(f"克隆音色：{'中式语调（慢速+降调）' if tone else '原声'}"
+        print(f"  克隆音色：{'中式语调（慢速+降调）' if tone else '原声'}"
               + (f"，噪点强度={noise}" if noise > 0 else ""))
+    print("─" * 56)
     run_args = argparse.Namespace(
         command="ets-do",
         homework_id=homework_id,
@@ -368,8 +592,8 @@ def _do_homework(config, item: dict, parent_id: str = "") -> None:
         pitch="+0Hz",
         clone_reference=Path(clone_reference) if clone_reference else None,
         score_overrides=None,
-        target_total=scores["target_total"] if scores["target_total"] > 0 else None,
-        use_time=scores["use_time"] if scores["use_time"] > 0 else None,
+        target_total=scoring["target_total"],
+        use_time=scoring["use_time"] if scoring["use_time"] > 0 else None,
         no_upload=False,
         score=scores["score"],
         accuracy=scores["accuracy"],
@@ -377,7 +601,15 @@ def _do_homework(config, item: dict, parent_id: str = "") -> None:
         integrity=scores["integrity"],
         stress=scores["stress"],
     )
-    asyncio.run(_ets_do(run_args, config=config))
+    asyncio.run(
+        _ets_do(
+            run_args,
+            config=config,
+            homework=homework,
+            per_question_scores=per_question or None,
+            allow_over_max=scoring["allow_over_max"],
+        )
+    )
 
 
 def main() -> None:
@@ -418,7 +650,7 @@ def main() -> None:
             elif action == "skip":
                 print(f"跳过 {item.get('name', '')}")
                 continue
-            _do_homework(config, item, parent_id=parent_id)
+            _do_homework(config, client, item, parent_id=parent_id)
             done += 1
         if done:
             print()
