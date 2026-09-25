@@ -73,24 +73,40 @@ class QuestionResult:
     interface_response: dict = field(default_factory=dict)
 
 
+def question_ref_duration(question: Question) -> float:
+    """计算单个题目参考录音/音频时长（秒）。"""
+    if "audio_duration" in question.metadata and isinstance(question.metadata["audio_duration"], (int, float)):
+        dur = float(question.metadata["audio_duration"])
+        if dur > 0:
+            return dur / 1000.0 if dur > 500 else dur
+
+    cat = (question.category or "").lower()
+    stype = (question.structure_type or "").lower()
+    if cat == "choose" or "choose" in stype:
+        return 6.0
+
+    text = (question.answer or question.text or "").strip()
+    words = len(text.split())
+    if words > 0:
+        return max(3.0, round(words / 2.2, 1))
+    return 5.0
+
+
 def question_use_time(question: Question) -> int:
-    if question.category == "choose" or question.structure_type == "word_question":
-        return 8
-    if question.structure_type in {"collector.picture", "collector.repeat_essay"}:
-        return 12
-    return 10
+    return int(round(question_ref_duration(question)))
 
 
 def recommended_use_time(homework: Homework) -> int:
-    """推荐完成用时（秒）：按题目类型累加，并给不同作业类型一个合理下限。"""
-    base = sum(question_use_time(item) for item in homework.questions)
+    """推荐完成用时（秒）：按照每道题的参考录音的时长加在一起 x 2 + 2分钟(120秒)。"""
+    ref_total = sum(question_ref_duration(item) for item in homework.questions)
+    rec_time = int(round(ref_total * 2 + 120))
     if homework.kind == "mock":
-        return max(base, 180)
+        return max(rec_time, 180)
     if homework.kind in {"pk", "vocab"}:
-        return max(base, 30)
+        return max(rec_time, 30)
     if homework.kind == "composition":
-        return max(base, 300)
-    return max(base, 60)
+        return max(rec_time, 300)
+    return max(rec_time, 60)
 
 
 class StudyWorkflow:
